@@ -1,0 +1,14 @@
+/my-notes.md
+benchmark/.env
+benchmark/part1_wordpairs/cache/
+benchmark/data/
+
+# Regenerable: embedding cache (~21 MB), raw catalog pages, composed embedding inputs.
+# The scored evidence (catalog.json, native_baseline.json, engine_results.json, scores.json)
+# is small and stays tracked.
+benchmark/part2_retrieval/cache/
+benchmark/part2_retrieval/data/catalog/
+benchmark/part2_retrieval/data/embedding_inputs.json
+benchmark/part2_retrieval/data/native_baseline.log
+__pycache__/
+*.pyc

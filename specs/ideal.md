@@ -1,0 +1,7 @@
+- AI-powered semantic search Shopify app, design specially for hebrew shops. main features:
+  - semantic search for hebrew
+  - surface relevant products that the standard search misses when a shopper uses a synonym, a misspelling, or a different grammatical form (singular/plural) of a word that doesn't exactly match the product's catalog text.
+  - Example: a shopper searches "תחתונים" (plural) but the catalog only contains products named "תחתון" (singular). The AI app recognizes these are the same thing semantically and ensures the matching products appear.
+- Each searchable product is converted to an embedding vector via an external AI provider: Gemini, Open AI
+- Color/attribute search: recognize colors/sizes in the query and apply them as filters. for example "green sunglasses" (where color is a product attribute, not part of the product name/description).
+- Handle word variations including typos - if a shopper types a misspelled word, the search should still understand what they meant (similar to how Google handles typos).

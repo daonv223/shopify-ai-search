@@ -1,0 +1,3 @@
+- Hebrew embedding benchmark between Shopify native sematic search and our sematic search using Gemini API and opensearch: i think need to comibe kNN (k-Nearest Neighbors) — Semantic Search and BM25 — Keyword Search
+- please using gemini:gemini-embedding-001 (dimension 3072) to embed data
+- i'll provide GEMINI API KEY
