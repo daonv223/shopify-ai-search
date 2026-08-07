@@ -1,0 +1,29 @@
+# Local dev services: Postgres (app DB) + OpenSearch (search index).
+# The app itself runs via `shopify app dev`; only stateful services live here.
+# OpenSearch matches the Phase 0 benchmark configuration (2.12, kNN enabled).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: shopify
+      POSTGRES_PASSWORD: shopify
+      POSTGRES_DB: shopify_ai_search
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  opensearch:
+    image: opensearchproject/opensearch:2.12.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+
+volumes:
+  postgres-data:
+  opensearch-data:

@@ -1,0 +1,50 @@
+# This file stores configurations for your Shopify app.
+client_id = ""
+
+[access_scopes]
+# Read-only catalog access — per specs/app-foundation/spec.md §3.1, request nothing we don't use.
+scopes = "read_products"
+
+# Storefront /apps/search → this app's /proxy/* routes.
+# The url is managed by `shopify app config link` / `shopify app dev` (tunnel URL in dev).
+[app_proxy]
+url = "https://example.invalid/proxy"
+prefix = "apps"
+subpath = "search"
+
+[webhooks]
+api_version = "2025-10"
+
+  # Handled by: /app/routes/webhooks.app.uninstalled.tsx
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = ["app/uninstalled"]
+
+  # Handled by: /app/routes/webhooks.app.scopes_update.tsx
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+  # Incremental catalog sync (task 1.3) — handled by: /app/routes/webhooks.products.tsx
+  [[webhooks.subscriptions]]
+  topics = ["products/create", "products/update", "products/delete"]
+  uri = "/webhooks/products"
+
+  # Bulk ingest completion (task 1.2) — handled by: /app/routes/webhooks.bulk-operations.tsx
+  [[webhooks.subscriptions]]
+  topics = ["bulk_operations/finish"]
+  uri = "/webhooks/bulk-operations"
+
+  # Mandatory compliance topic for public apps only
+  # See: https://shopify.dev/docs/apps/build/privacy-law-compliance
+  # [[webhooks.subscriptions]]
+  # uri = "/webhooks/customers/data_request"
+  # compliance_topics = ["customers/data_request"]
+
+  # [[webhooks.subscriptions]]
+  # uri = "/webhooks/customers/redact"
+  # compliance_topics = ["customers/redact"]
+
+  # [[webhooks.subscriptions]]
+  # uri = "/webhooks/shop/redact"
+  # compliance_topics = ["shop/redact"]
