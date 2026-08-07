@@ -13,12 +13,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await db.session.deleteMany({ where: { shop } });
   }
 
-  // Mark the shop uninstalled; the index-drop/data-purge cleanup job (spec
-  // §3.1, 48h GDPR window) keys off this timestamp.
+  // Mark the shop uninstalled and drop its search data (spec §3.1 cleanup;
+  // well inside the 48h GDPR window).
+  const shopRow = await db.shop.findUnique({ where: { id: shop } });
   await db.shop.updateMany({
     where: { id: shop },
     data: { uninstalledAt: new Date() },
   });
+  if (shopRow) {
+    const { deleteIndex } = await import("../services/opensearch.server");
+    await deleteIndex(shopRow.indexAlias).catch((err) =>
+      console.error(`[uninstall] index cleanup failed for ${shop}:`, err),
+    );
+    await db.productSyncState.deleteMany({ where: { shop } });
+  }
 
   return new Response();
 };
