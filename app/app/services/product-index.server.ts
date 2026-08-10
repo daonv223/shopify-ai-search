@@ -26,10 +26,14 @@ export async function indexProducts(
 ): Promise<IndexResult> {
   await ensureIndex(indexAlias);
 
+  // fullSync needs every state row for vanished-product detection; the
+  // single-product webhook path only needs the rows it's touching.
   const existing = new Map(
     (
       await db.productSyncState.findMany({
-        where: { shop },
+        where: opts.fullSync
+          ? { shop }
+          : { shop, productId: { in: inputs.map((p) => p.id) } },
         select: { productId: true, contentHash: true, embeddingStale: true },
       })
     ).map((s) => [s.productId, s]),
