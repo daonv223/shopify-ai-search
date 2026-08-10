@@ -13,8 +13,8 @@ queries from one place. At the end of this phase there is **no search UX and no
 Hebrew NLP yet** — the deliverable is the foundation the later phases index
 into: install flow, full ingest, incremental sync, and the index schema.
 
-**Definition of done:** install the app on a dev store → full catalog appears
-in OpenSearch; edit/create/delete a product in admin → the index reflects it
+**Definition of done:** install the app on a dev store and press "Sync All
+Catalog" → full catalog appears in OpenSearch; edit/create/delete a product in admin → the index reflects it
 within seconds; only products whose *searchable text* actually changed are
 marked for re-embedding.
 
@@ -62,7 +62,8 @@ One `bulkOperationRunQuery` per shop fetching, per product:
     (default: all `visibleToStorefrontApi` metafields; admin UI for the
     allowlist is Phase 5.1).
 - Only `ACTIVE` products published to the Online Store channel are indexed.
-- Flow: start bulk op on install (and on demand) → `bulk_operations/finish`
+- Flow: merchant presses **"Sync All Catalog"** in the app's admin page to
+  start the bulk op (install does **not** auto-trigger it) → `bulk_operations/finish`
   webhook → download JSONL → stream-parse → compose search documents (§3.5) →
   bulk-index into OpenSearch. Must handle the one-concurrent-bulk-op-per-shop
   limit and resume/retry a failed download.
@@ -141,7 +142,7 @@ inherit a corpus with known ground truth.
 
 | # | Test | Required outcome |
 |---|---|---|
-| A1 | Fresh install on the seeded dev store | OAuth completes; bulk ingest runs; OpenSearch doc count = published-product count; `sync_runs` row shows success |
+| A1 | Fresh install on the seeded dev store, then press "Sync All Catalog" | OAuth completes with **no** automatic ingest; pressing the button runs the bulk ingest; OpenSearch doc count = published-product count; `sync_runs` row shows success |
 | A2 | Spot-check indexed doc for the anchor product (`שמן גוף & שימר שקדים למראה עור זוהר`) | All §3.2 fields present incl. variant SKUs and metafields; final-letter folding visible via `_analyze` |
 | A3 | Edit a product title in admin | Index updated < 30s; `content_hash` changed; `embedding_stale = true` |
 | A4 | Change only inventory/price on a product | Index price/availability updated; `content_hash` unchanged; `embedding_stale` **not** set |

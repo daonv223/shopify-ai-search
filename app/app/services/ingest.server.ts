@@ -53,7 +53,7 @@ const BULK_QUERY = `
 
 const gidToId = (gid: string) => gid.slice(gid.lastIndexOf("/") + 1);
 
-// Kick off a full catalog ingest (on install via afterAuth, or on demand).
+// Kick off a full catalog ingest (on demand via the "Sync All Catalog" button).
 // Shopify allows one running bulk query per shop; a second start is a no-op.
 export async function startCatalogIngest(graphql: GraphqlFn, shop: string): Promise<string | null> {
   const running = await db.syncRun.findFirst({ where: { shop, status: "running" } });

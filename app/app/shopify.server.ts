@@ -17,7 +17,7 @@ const shopify = shopifyApp({
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
   hooks: {
-    afterAuth: async ({ session, admin }) => {
+    afterAuth: async ({ session }) => {
       // One index per shop, addressed via alias (spec §3.4).
       const indexAlias = `products_${session.shop
         .replace(/\.myshopify\.com$/, "")
@@ -28,19 +28,6 @@ const shopify = shopifyApp({
         update: { uninstalledAt: null },
         create: { id: session.shop, indexAlias },
       });
-
-      // First install: kick off the initial catalog ingest (task 1.2). The
-      // bulk_operations/finish webhook picks up the result.
-      const hasRun = await prisma.syncRun.findFirst({
-        where: { shop: session.shop },
-        select: { id: true },
-      });
-      if (!hasRun) {
-        const { startCatalogIngest } = await import("./services/ingest.server");
-        void startCatalogIngest(admin.graphql, session.shop).catch((err) =>
-          console.error(`[ingest] ${session.shop} start failed:`, err),
-        );
-      }
     },
   },
   future: {
