@@ -4,6 +4,14 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## About the Developer
+
+The developer has 6 years of general software engineering experience but is **new to Shopify app development**. When work touches Shopify-specific concepts (app proxy, OAuth/session tokens, webhooks, theme app extensions, Liquid, Polaris, App Bridge, metafields, GraphQL Admin API, etc.):
+
+- Briefly explain the concept and *why* it exists before or alongside the implementation — don't assume familiarity.
+- Ground explanations in this project's actual files (e.g., `app/shopify.app.toml`, route files) rather than abstract docs.
+- No need to explain general engineering concepts (HTTP, REST, testing, TypeScript, databases) — only the Shopify platform parts.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
