@@ -6,11 +6,54 @@ export const opensearch = new Client({
   node: process.env.OPENSEARCH_URL ?? "http://localhost:9200",
 });
 
-// Phase 1 analyzer: final-letter folding + lowercase only (spec §3.4). Phase 2
-// replaces the internals of `hebrew_search` (morphology multiplexer, validated
-// in benchmark/part2_retrieval/03_index_opensearch.py); field names and query
-// contracts stay stable, the swap happens via reindex + alias flip.
-const TEXT = { type: "text", analyzer: "hebrew_search" };
+// Phase 2 analyzer stack, ported from the validated benchmark design
+// (benchmark/part2_retrieval/03_index_opensearch.py). Every text field is
+// indexed twice so retrieval legs stay independently addressable:
+//   <field>        `hebrew_text`  — final-letter folding + lowercase (exact/fuzzy legs)
+//   <field>.morph  `hebrew_morph` — same + `he_variants` multiplexer (morphology leg)
+//
+// Hebrew clitics are ambiguous with root letters — ש is a prefix in שמן-לא but
+// the first root letter of שיער/שימר — so stripping runs inside a `multiplexer`
+// that emits the ORIGINAL token plus every variant at the same position; no
+// real word is ever destroyed (מראה keeps מראה and also emits ראה).
+//
+// Suffix folding puts plural and construct forms on the same stem as the
+// singular: שמנים → שמנ, שמני → שמנ, שמן → שמנ. The pattern matches ימ/יימ (not
+// ים/יים) because the char_filter has already folded the final mem by the time
+// token filters run. Deliberately does NOT strip feminine ה/ת — that over-stems
+// common roots (בית → בי).
+const HE_PREFIX = "^[ובלמכהש](?=[א-ת]{3,}$)";
+const HE_SUFFIX = "(?<=[א-ת]{2})(יימ|ימ|ות|י)$";
+
+// Feminine ־ה singulars never meet their ־ות/־ימ plurals: the plural's suffix
+// strips (אריזות → אריז) but the singular keeps its ה (general ה-stripping is
+// excluded — it over-stems). Corpus audit (scripts/nlp-audit.ts §C): curated
+// retrieval-relevant nouns only, each mapped onto the stem its plural already
+// produces. Runs inside the suffix chains, so prefixed forms (באריזה) are
+// covered by the existing prefix strips.
+const HE_FEM_SINGULAR_RULES = [
+  "אריזה => אריז", // packaging / refill
+  "מסכה => מסכ", // mask
+  "נסיעה => נסיע", // travel (kits)
+  "לילה => ליל", // night (cream)
+  "חומצה => חומצ", // acid (hyaluronic)
+  "פורמולה => פורמול", // formula
+  "שכבה => שכב", // layer
+  "מידה => מיד", // size
+  "תחושה => תחוש", // sensation
+  "תוצאה => תוצא", // result
+  "נגיעה => נגיע", // touch (of color)
+  "טיפה => טיפ", // drop
+  "סדרה => סדר", // product line
+  "טכניקה => טכניק", // technique
+  "אומגה => אומג", // omega (3/6)
+];
+
+const TEXT = {
+  type: "text",
+  analyzer: "hebrew_text",
+  fields: { morph: { type: "text", analyzer: "hebrew_morph" } },
+};
 
 const INDEX_BODY = {
   settings: {
@@ -22,12 +65,47 @@ const INDEX_BODY = {
           mappings: ["ך => כ", "ם => מ", "ן => נ", "ף => פ", "ץ => צ"],
         },
       },
+      filter: {
+        he_strip_prefix: {
+          type: "pattern_replace",
+          pattern: HE_PREFIX,
+          replacement: "",
+        },
+        he_strip_suffix: {
+          type: "pattern_replace",
+          pattern: HE_SUFFIX,
+          replacement: "",
+        },
+        he_fem_singular: {
+          type: "stemmer_override",
+          rules: HE_FEM_SINGULAR_RULES,
+        },
+        // Emits the original token plus each chain's output at the same
+        // position. Double prefix chains cover stacked clitics (ולמראה).
+        he_variants: {
+          type: "multiplexer",
+          preserve_original: true,
+          filters: [
+            "he_fem_singular,he_strip_suffix",
+            "he_strip_prefix",
+            "he_strip_prefix,he_fem_singular,he_strip_suffix",
+            "he_strip_prefix,he_strip_prefix",
+            "he_strip_prefix,he_strip_prefix,he_fem_singular,he_strip_suffix",
+          ],
+        },
+      },
       analyzer: {
-        hebrew_search: {
+        hebrew_text: {
           type: "custom",
           char_filter: ["he_final_letters"],
           tokenizer: "standard",
           filter: ["lowercase"],
+        },
+        hebrew_morph: {
+          type: "custom",
+          char_filter: ["he_final_letters"],
+          tokenizer: "standard",
+          filter: ["lowercase", "he_variants"],
         },
       },
     },
@@ -42,12 +120,12 @@ const INDEX_BODY = {
       title: TEXT,
       body: TEXT,
       tags: TEXT,
-      product_type: { ...TEXT, fields: { raw: { type: "keyword" } } },
-      vendor: { ...TEXT, fields: { raw: { type: "keyword" } } },
+      product_type: { ...TEXT, fields: { ...TEXT.fields, raw: { type: "keyword" } } },
+      vendor: { ...TEXT, fields: { ...TEXT.fields, raw: { type: "keyword" } } },
       variant_titles: TEXT,
       option_values: TEXT,
       metafield_text: TEXT,
-      category_name: { ...TEXT, fields: { raw: { type: "keyword" } } },
+      category_name: { ...TEXT, fields: { ...TEXT.fields, raw: { type: "keyword" } } },
       sku: { type: "keyword" },
       barcode: { type: "keyword" },
       // "Name::Value" pairs — the attribute vocabulary Phase 3.4 filter
