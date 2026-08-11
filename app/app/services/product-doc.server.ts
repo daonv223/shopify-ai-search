@@ -52,8 +52,11 @@ const BODY_CHARS = 1500;
 // The text that becomes the product's embedding — title first, then type,
 // tags, body. MUST stay identical to the Phase 0 benchmark composition; the
 // content hash below is defined over it, so changing this re-embeds every
-// product on the next sync.
-export function composeEmbeddingInput(p: ProductInput): string {
+// product on the next sync. Takes only the fields it reads so the embedding
+// backfill worker can recompose the input from an indexed doc's _source.
+export function composeEmbeddingInput(
+  p: Pick<ProductInput, "title" | "productType" | "tags" | "body">,
+): string {
   const parts = [
     p.title,
     p.productType,

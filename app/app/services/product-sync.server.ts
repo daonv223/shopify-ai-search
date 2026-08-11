@@ -1,4 +1,5 @@
 import db from "../db.server";
+import { scheduleEmbeddingBackfill } from "./embedding-backfill.server";
 import { indexProducts, removeProduct } from "./product-index.server";
 import { stripHtml, type ProductInput } from "./product-doc.server";
 
@@ -143,5 +144,6 @@ export async function processProductWebhook(
   }
 
   const result = await indexProducts(shop, shopRow.indexAlias, [toProductInput(product)]);
+  if (result.newlyStale) scheduleEmbeddingBackfill(shop, shopRow.indexAlias);
   return result.newlyStale ? "indexed, marked stale" : "indexed";
 }

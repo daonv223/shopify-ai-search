@@ -1,6 +1,7 @@
 import readline from "node:readline";
 import { Readable } from "node:stream";
 import db from "../db.server";
+import { scheduleEmbeddingBackfill } from "./embedding-backfill.server";
 import { indexProducts, type IndexResult } from "./product-index.server";
 import { stripHtml, type ProductInput } from "./product-doc.server";
 
@@ -202,6 +203,7 @@ export async function processBulkOperationFinish(
   } // no url => empty catalog; fall through and sync to zero
 
   const result = await indexProducts(shop, shopRow.indexAlias, inputs, { fullSync: true });
+  scheduleEmbeddingBackfill(shop, shopRow.indexAlias);
 
   if (run) {
     await db.syncRun.update({
