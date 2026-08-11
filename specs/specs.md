@@ -6,7 +6,7 @@
 
 ## 1. Positioning
 
-**Headline: Hebrew morphology and typo normalization — not "semantic search."**
+**Headline: Hebrew morphology normalization — not "semantic search."**
 
 Live testing proved that Shopify's native semantic search is already active and working
 in Hebrew (cross-language `shimmer` → `שימר` product at #1; `נצנצים לגוף` → shimmer oil
@@ -27,10 +27,9 @@ What Shopify demonstrably does **not** do for Hebrew — all reproduced on a liv
 
 Sales demo priority (most commercially valuable first):
 1. **Plural→singular failure** — screenshot-ready on a flagship brand's store (`שמנים` → shampoos).
-2. **Typo zero-results** — `שדקים` (transposition) returns nothing.
 
-Gaps 3 and 4 (ktiv variance, non-deterministic results) are documented above as
-research evidence but deferred — see Non-Goals.
+Gaps 2, 3 and 4 (typo tolerance, ktiv variance, non-deterministic results) are
+documented above as research evidence but deferred — see Non-Goals.
 
 ## 2. Core Features
 
@@ -47,16 +46,13 @@ Normalize both the indexed catalog text and incoming queries:
 - **Final-letter normalization**: ך→כ, ם→מ, ן→נ, ף→פ, ץ→צ.
 - **Construct state**: `שמני גוף` (construct plural) must match `שמן גוף`.
 
-### 2.2 Hebrew typo tolerance (must-have)
+### 2.2 Hebrew typo tolerance — REMOVED (descoped 2026-08-11)
 
-- Edit distance 1 substitutions, insertions, deletions, and **transpositions**
-  (`שדקים` → `שקדים`), including keyboard-adjacency errors on the Hebrew layout
-  (`עןר` → `עור`).
-- No "first-N-characters-correct" restriction — Hebrew product nouns are often 3–4
-  letters and prefixed forms shift every character position, so Shopify's 4-char rule
-  is unusable for Hebrew even where it applies.
-- Applied to all searchable fields, including tags and descriptions (native typo
-  tolerance covers only titles/types/vendors even in supported languages).
+Dropped from v1 after review; misspelled queries will not match. The native
+gap remains documented in §1 as research evidence. The validated design
+(edit distance 1 with transpositions, no first-N-chars restriction,
+keyboard-adjacency weighting) is preserved in the Phase 0 benchmark and
+`specs/hebrew-nlp/phase2-notes.md` should it be revived.
 
 ### 2.3 Query → filter extraction (must-have)
 
@@ -84,7 +80,7 @@ Normalize both the indexed catalog text and incoming queries:
 
 ### 2.5 Predictive search / type-ahead (high value)
 
-- The full pipeline (morphology, typo, semantic, filters) applies to the type-ahead
+- The full pipeline (morphology, semantic, filters) applies to the type-ahead
   dropdown, not only the results page — precisely where Shopify's semantic layer is
   absent.
 
@@ -106,6 +102,9 @@ Normalize both the indexed catalog text and incoming queries:
 
 ## 4. Explicit Non-Goals (v1)
 
+- **Typo tolerance** (`שדקים` → `שקדים`, keyboard-adjacency errors) — descoped
+  2026-08-11 after review (see §2.2); the native gap stays in §1 as research
+  evidence only.
 - **Ktiv male/haser & spelling-variance normalization** (`זהר` ↔ `זוהר`, geresh
   variants, Hebrew↔Latin transliteration) — verified as a native gap, deferred to a
   later version.
@@ -129,7 +128,6 @@ store data: L'Occitane IL product `שמן גוף & שימר שקדים למרא�
 | Baseline | `שמן גוף`, `שימר`, `שקדים` | Exact matches returned, target in top results |
 | Stemming | `שקד`, `שמנים`, `שמני גוף` | Plural↔singular resolved; `שמנים` returns body oils, not shampoos |
 | Prefixes | `מראה`, `שמן לגוף`, `בשמן`, `השמן`, `ושקדים` | Prefixed/bare forms match |
-| Typos | `שדקים` (transposition), `שקדימ` (final letter), `עןר`, `שמן גיף` | Non-zero, relevant results |
 | Filters | `משקפי שמש ירוקות`, "green sunglasses" | Color facet applied, results narrowed |
 | Semantic | `נצנצים לגוף`, `ברק לעור`, `body oil` | At least parity with native (target product top-5) |
 

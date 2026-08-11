@@ -50,10 +50,22 @@ Seeds the harness index and dumps three review sections:
   adjectives/participles (מכילה, מעניקה, רכה…) and false pairs
   (מקלות/מקלה, כמות/כמה) — deliberately not bridged.
 
+## Typo tolerance (§3.4) — descoped 2026-08-11
+
+Decision after review: the typo-tolerance leg is **not** being implemented.
+Task 2.4, the harness's Typos tier (acceptance A4), and the stacking guard
+(A5) are dropped; misspelled queries (שדקים) will simply not match in v1.
+The analyzer stack is unaffected — this was always a query-side leg, never a
+mapping change. If revived later, the validated design is preserved in the
+benchmark (`hybrid_3leg`, fuzziness 1 + transpositions, prefix_length 0, bare
+fields only — never `.morph`, which degraded the lexical tier 90%→66%) and in
+this repo's history (commit c9e7920 carries the harness fuzzy leg and guard
+tests).
+
 ## Effect on the harness
 
 Tier hit@10 unchanged after the override (baseline 0.833, stemming 0.967,
-prefixes 1.0, typos 0.9) — recall added, no precision cost. 35 tests green.
+prefixes 1.0) — recall added, no precision cost.
 
 Sources for the evaluation: [elasticsearch-analysis-hebrew](https://github.com/synhershko/elasticsearch-analysis-hebrew),
 [HebMorph](https://github.com/synhershko/HebMorph).

@@ -20,9 +20,6 @@ export type RelevanceRow = {
   positives: string[];
 };
 
-// Anchor product (benchmark ground_truth.json): שמן גוף & שימר שקדים למראה עור זוהר
-export const ANCHOR = "shimmering-body-oil-100ml";
-
 function jsonl(file: string): any[] {
   return readFileSync(path.join(DATASET, file), "utf8")
     .split("\n")
@@ -92,28 +89,6 @@ export function morphLegQuery(query: string): object {
       fields: MORPH_FIELDS,
       type: "best_fields",
       operator: "or",
-    },
-  };
-}
-
-// Typo leg per spec §3.4: fuzziness 1 with transpositions (NOT AUTO — AUTO
-// grants distance-2 on longer tokens, the `oil`→`OILS` pollution),
-// prefix_length 0 (Hebrew clitics shift every character position), and BARE
-// fields only — never `.morph` (stacking degraded the lexical tier 90%→66%,
-// benchmark verdict.md; the guard test in retrieval.test.ts encodes this).
-// Task 2.4 (§3.4) promotes this into the app's search service; the harness
-// should then import it from there.
-export function fuzzyLegQuery(query: string): object {
-  return {
-    multi_match: {
-      query,
-      fields: BASE_FIELDS,
-      type: "best_fields",
-      operator: "or",
-      fuzziness: "1",
-      prefix_length: 0,
-      fuzzy_transpositions: true,
-      max_expansions: 50,
     },
   };
 }

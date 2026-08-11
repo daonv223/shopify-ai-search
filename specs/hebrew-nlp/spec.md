@@ -1,7 +1,7 @@
 # Phase 2 Spec — Hebrew NLP Core
 
-> Phase 2 of `specs/task-breakdown.md` (~13 days). Inputs: `specs/specs.md`
-> §2.1–2.2 (morphology + typo requirements, §5 acceptance queries), the Phase 0
+> Phase 2 of `specs/task-breakdown.md`. Inputs: `specs/specs.md`
+> §2.1 (morphology requirements, §5 acceptance queries), the Phase 0
 > analyzer validated in `benchmark/part2_retrieval/03_index_opensearch.py`, and
 > the build-phase findings in `benchmark/part2_retrieval/verdict.md`. Builds on
 > the Phase 1 index (`app/app/services/opensearch.server.ts`), whose
@@ -11,15 +11,14 @@
 ## 1. Goal
 
 Ship the differentiator: index- and query-side Hebrew normalization so that
-plural/singular, construct-state, clitic-prefixed, and misspelled forms of a
-word all retrieve the same products. At the end of this phase there is still
+plural/singular, construct-state, and clitic-prefixed forms of a word all
+retrieve the same products. At the end of this phase there is still
 **no ranking, fusion, or UI** — the deliverable is the analyzer stack in the
-products index, a typo-matching strategy the retrieval phase can mount as its
-own leg, and a regression harness that proves the linguistics on the seeded
-catalog.
+products index and a regression harness that proves the linguistics on the
+seeded catalog.
 
 **Definition of done:** the NLP harness (§3.5) passes the Baseline, Stemming,
-Prefixes, and Typos tiers of `specs.md` §5 against the 499-product Phase 0
+and Prefixes tiers of `specs.md` §5 against the 499-product Phase 0
 corpus, and the new analyzer is live in a dev-store index via a `_v2`
 build-and-swap with zero downtime — field names and query contracts unchanged,
 exactly as the Phase 1 mapping comment promises.
@@ -44,8 +43,7 @@ analyzer design. Phase 2 productionizes that design rather than starting fresh.
 |---|---|---|
 | Ambiguity strategy (task 2.2) | **Non-destructive multiplexer**: emit the original token *plus* every stripped variant at the same position, never replace | Solves the `מראה`-must-not-become-`ראה` problem by construction — the original always survives. Validated at 74% lexical hit@10 (vs 35% folding-only). The task breakdown's "vocabulary check against the catalog" becomes a fallback, not the plan (§6.1). |
 | Stemming baseline (task 2.3) | The Phase 0 regex suffix folding (`ימ`/`יימ`/`ות`/`י` after ≥2 Hebrew letters), **no feminine ה/ת stripping** | Scored **97% on the stemming tier** (from 28%) including construct state — `שמני גוף` ≈ `שמן גוף` works because both fold to stem `שמנ`. Feminine stripping over-stems (`בית` → `בי`), confirmed in the benchmark. A lexicon-based stemmer must beat this floor to earn its place (§3.3). |
-| Typo architecture (task 2.4) | Fuzziness runs in a **separate query leg**, never stacked on the morphology analyzer | The benchmark's least obvious finding: stacking `fuzziness` on the multiplexed field *degraded* lexical results 90% → 66% (multiplexer emits several tokens per word; fuzzy-expanding all of them pulls in noise). `hybrid_3leg` (morph leg + fuzzy leg + kNN) scored 81% on the typo tier and 100% on flagship `שדקים`, vs 71%/50% stacked. |
-| Field layout | Every text field indexed twice: bare (`hebrew_text`-style: folding + lowercase) and a `.morph` subfield with the full analyzer | Keeps the exact-match, morphology, and fuzzy legs independently addressable — the substrate Phase 3.3's fusion (and its "gate the lexical leg on real signal" fix) requires. |
+| Field layout | Every text field indexed twice: bare (`hebrew_text`-style: folding + lowercase) and a `.morph` subfield with the full analyzer | Keeps the exact-match and morphology legs independently addressable — the substrate Phase 3.3's fusion (and its "gate the lexical leg on real signal" fix) requires. |
 
 ## 3. Scope
 
@@ -99,26 +97,14 @@ Mostly shipped in Phase 1 (`he_final_letters` char filter: ך→כ ם→מ ן→
 - Whatever the path, the output is still a token filter inside `he_variants` —
   the mapping contract does not change.
 
-### 3.4 Typo tolerance (task 2.4 · 3d)
+### 3.4 Typo tolerance — REMOVED (descoped 2026-08-11)
 
-- Deliverable is a **query-builder function** (in `opensearch.server.ts` or a
-  sibling `search` service) that Phase 3 mounts as the fuzzy leg — not a change
-  to the analyzers. Configuration per `specs.md` §2.2:
-  - `fuzziness: 1` with `transpositions` (covers `שדקים`→`שקדים`), **not
-    `AUTO`** — AUTO grants distance-2 on longer tokens and caused the
-    `oil`→`OILS` haircare pollution in the benchmark's `body oil` failure;
-  - `prefix_length: 0` (no first-N-chars restriction — prefixed Hebrew forms
-    shift every character position);
-  - runs against the **bare** fields (folding + lowercase only), never the
-    `.morph` subfields (the stacking finding, §2);
-  - covers all searchable text fields incl. tags, body, and metafield text.
-- **Keyboard-adjacency weighting**: OpenSearch fuzziness has no notion of key
-  distance, so this is app-side query expansion — a small Hebrew-layout
-  adjacency map generating substitution candidates (`עןר` → `עור`) OR'd into
-  the fuzzy leg as exact terms with a boost, so an adjacent-key typo ranks its
-  correction above other distance-1 neighbors. Timebox this; plain distance-1
-  already *matches* the adjacency cases (they are substitutions), so this is a
-  ranking refinement — cut it before cutting anything else if 2.3 overruns.
+Typo tolerance (task 2.4: the fuzzy query leg and keyboard-adjacency
+weighting) was descoped after review and will not be implemented in v1.
+Misspelled queries (`שדקים`) will not match. The validated design, should it
+be revived, is preserved in the Phase 0 benchmark (`hybrid_3leg`,
+`fuzziness: 1` + transpositions, `prefix_length: 0`, bare fields only — never
+`.morph`) and in `phase2-notes.md`.
 
 ### 3.5 NLP regression harness (task 2.5 · 1d — build FIRST)
 
@@ -136,13 +122,12 @@ before touching the analyzer, so 2.2–2.4 develop red-to-green against it.
      §5 forms (`שמנים`→ contains `שמנ`; `למראה` → contains `מראה` *and*
      `ראה` *and* original; `בשמן`/`השמן`/`ושקדים` strip; `מראה` keeps original).
   2. **Retrieval tests** per §5 tier: Baseline, Stemming, Prefixes (morph-leg
-     match query), Typos (fuzzy-leg query) — asserting the ground-truth product
-     appears in top-10, tier hit-rates at or above the benchmark's
-     (lexical-morph 74% overall, stemming 97%, typo leg ≥ the 3-leg 81% once
-     Phase 3 fuses; within Phase 2 assert the fuzzy leg alone finds the target).
+     match query) — asserting the ground-truth product appears in top-10, tier
+     hit-rates at or above the benchmark's (lexical-morph 74% overall,
+     stemming 97%).
 - The Filters and Semantic tiers are **out** — they need Phase 3 (fusion,
-  embeddings, filter extraction). The harness structure should let Phase 5.2
-  add them.
+  embeddings, filter extraction). The Typos tier is out permanently (§3.4
+  descope). The harness structure should let Phase 5.2 add tiers.
 
 ### 3.6 Reindex rollout
 
@@ -176,8 +161,6 @@ Run the harness against the seeded corpus; A6–A8 manually on the dev store.
 | A1 | `_analyze` battery (§3.5 layer 1) | All token expectations pass; `מראה` emits its original form; `ESSENTIAL OILS` tokens unmangled |
 | A2 | Stemming tier: `שקד`, `שמנים`, `שמני גוף` | Ground-truth products in top-10 on the morph leg; `שמנים` returns body oils, not shampoos; tier hit@10 ≥ 90% (benchmark: 97%) |
 | A3 | Prefixes tier: `מראה`, `שמן לגוף`, `בשמן`, `השמן`, `ושקדים` | Bare/prefixed forms match the same products; no regression on Baseline tier (`שמן גוף`, `שימר`, `שקדים` still hit) |
-| A4 | Typos tier on the fuzzy leg: `שדקים`, `שקדימ`, `עןר`, `שמן גיף` | Non-zero relevant results; anchor product retrieved for `שדקים` |
-| A5 | Stacking guard | A test asserting the fuzzy leg queries bare fields — if someone later points it at `.morph`, the tier hit-rate assertion fails (this encodes the 90%→66% finding) |
 | A6 | Reindex migration on the dev store | `_v2` built and alias flipped; doc count unchanged; a query issued mid-reindex still answers (zero downtime); `_v1` gone after |
 | A7 | Incremental sync post-migration | Edit a product title in admin → appears normalized in `_v2` < 30s (Phase 1 pipeline unaffected by the swap) |
 | A8 | Latency guard | Morph-leg match query p95 stays comfortably inside the Phase 4 type-ahead budget (<100ms server-side) on the 499-product corpus — the multiplexer multiplies tokens; catch pathological expansion now |
@@ -189,9 +172,6 @@ Run the harness against the seeded corpus; A6–A8 manually on the dev store.
    catalog-vocabulary expansion (generate inflection→stem pairs for indexed
    terms app-side, load as `stemmer_override`). Only pursue if real-merchant
    catalogs surface stemming misses the regex can't cover.
-2. **Typo-leg final shape** — the benchmark left `hybrid_3leg` vs alternatives
-   open; Phase 2 ships the leg, Phase 3.3 owns how it fuses and whether the
-   keyboard-adjacency boost survives tuning.
-3. **Multiplexer index bloat** — 5 variant chains per token grows the inverted
+2. **Multiplexer index bloat** — 5 variant chains per token grows the inverted
    index; fine at 499 products, unmeasured at 10k+. Check index size during
    Phase 5.3 hardening.
