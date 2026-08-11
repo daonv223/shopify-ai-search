@@ -171,6 +171,61 @@ export async function ensureIndex(alias: string): Promise<string> {
   return alias;
 }
 
+// Rebuild the physical index behind `alias` with the current INDEX_BODY and
+// flip the alias (spec §3.6): create the next _vN, _reindex into it (analyzers
+// re-run automatically; stored fields and vectors carry over, so no Shopify
+// re-fetch and no re-embedding), verify the doc count, swap the alias in one
+// atomic updateAliases call so search keeps answering throughout, then delete
+// the old index. Writes that land between the reindex snapshot and the alias
+// flip stay in the old index and are dropped with it — run during a quiet
+// window; the webhook pipeline re-syncs any product on its next update.
+export async function migrateIndex(alias: string): Promise<string> {
+  const res = await opensearch.indices.getAlias({ name: alias }, { ignore: [404] });
+  if (res.statusCode === 404) return ensureIndex(alias);
+
+  const current = Object.keys(res.body)[0];
+  const version = Number(current.match(/_v(\d+)$/)?.[1] ?? 1);
+  const next = `${alias}_v${version + 1}`;
+
+  // A leftover from an aborted migration is stale — rebuild from scratch.
+  const leftover = await opensearch.indices.exists({ index: next });
+  if (leftover.body) await opensearch.indices.delete({ index: next });
+  await opensearch.indices.create({ index: next, body: INDEX_BODY as never });
+
+  await opensearch.reindex(
+    {
+      refresh: true,
+      wait_for_completion: true,
+      body: { source: { index: current }, dest: { index: next } },
+    },
+    { requestTimeout: 600_000 },
+  );
+
+  const [oldCount, newCount] = await Promise.all([
+    opensearch.count({ index: current }),
+    opensearch.count({ index: next }),
+  ]);
+  if (newCount.body.count !== oldCount.body.count) {
+    await opensearch.indices.delete({ index: next });
+    throw new Error(
+      `migrateIndex(${alias}): reindex count mismatch ` +
+        `(${current}=${oldCount.body.count}, ${next}=${newCount.body.count}); ` +
+        `${next} discarded, alias untouched`,
+    );
+  }
+
+  await opensearch.indices.updateAliases({
+    body: {
+      actions: [
+        { remove: { index: current, alias } },
+        { add: { index: next, alias } },
+      ],
+    },
+  });
+  await opensearch.indices.delete({ index: current });
+  return next;
+}
+
 export async function deleteIndex(alias: string): Promise<void> {
   const res = await opensearch.indices.getAlias({ name: alias }, { ignore: [404] });
   if (res.statusCode === 404) return;

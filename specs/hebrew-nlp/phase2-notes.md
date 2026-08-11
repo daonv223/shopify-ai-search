@@ -67,5 +67,29 @@ tests).
 Tier hit@10 unchanged after the override (baseline 0.833, stemming 0.967,
 prefixes 1.0) — recall added, no precision cost.
 
+## Reindex rollout (§3.6) — executed on the dev store 2026-08-11
+
+`migrateIndex(alias)` in `opensearch.server.ts` (runner:
+`npm run migrate-index -- <alias>`): creates the next `_vN` from the current
+`INDEX_BODY`, `_reindex`es (analyzers re-run; stored fields and vectors carry
+over — no Shopify re-fetch, no re-embedding), verifies the doc count, swaps
+the alias in one atomic `updateAliases` call, deletes the old index. A failed
+count check discards the new index and leaves the alias untouched. Known
+window: writes landing between the reindex snapshot and the alias flip are
+dropped with the old index — run in a quiet window; the webhook pipeline
+re-syncs any product on its next update.
+
+- **A6** verified live: `products_hebrew_ai_search_dev` `_v1` (Phase 1
+  folding-only mapping, 200 docs) → `_v2` with the morph analyzer; count
+  unchanged, `_v1` deleted, `title.morph` queries answering. Zero-downtime is
+  structural — the alias never has zero backing indices.
+- **A8** measured on the 499-product harness corpus: morph-leg match query
+  p50=1ms / p95=2ms / max=3ms server-side — far inside the <100ms type-ahead
+  budget; no pathological multiplexer expansion.
+- **A7** verified live: an admin title edit appeared in `_v2` ~19s later via
+  the Phase 1 webhook pipeline (writes go through the alias, unaffected by the
+  swap), and the fresh doc answered a stacked-clitic morph query (והשוליים →
+  שוליים) — normalized by the new analyzer on the way in.
+
 Sources for the evaluation: [elasticsearch-analysis-hebrew](https://github.com/synhershko/elasticsearch-analysis-hebrew),
 [HebMorph](https://github.com/synhershko/HebMorph).
