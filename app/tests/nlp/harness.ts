@@ -2,11 +2,14 @@
 //
 // Seeds from the frozen Phase 0 corpus (benchmark/dataset/) so tier hit-rates
 // are directly comparable to the benchmark's numbers (lexical-morph 74%
-// overall, stemming 97%). Lexical legs only — no embeddings, no kNN.
-import { readFileSync } from "node:fs";
+// overall, stemming 97%). Vectors come from the benchmark's embedding cache
+// (see embeddingCache below), so hybrid tests need no Gemini key.
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { opensearch } from "../../app/services/opensearch.server";
+import { composeEmbeddingInput } from "../../app/services/product-doc.server";
 
 // Distinct from the production `products_{shop}` alias pattern so a harness
 // run can never touch a dev-store index.
@@ -62,6 +65,62 @@ export function loadCorpusDocs(): { handle: string; doc: object }[] {
       },
     };
   });
+}
+
+// Real Gemini vectors from the benchmark's disk cache, keyed by
+// sha1(`${taskType}\0${text}`) (common.py EmbeddingClient). The app's
+// composeEmbeddingInput is byte-identical to the benchmark's compose(), so
+// every corpus doc and battery query resolves — verified 2026-08-14: 499/499
+// docs, 18/18 queries, zero misses. The cache is gitignored (21MB); without
+// it the corpus seeds vector-less and hybrid tests fail with the error below.
+const EMBED_CACHE = path.resolve(
+  import.meta.dirname,
+  "../../../benchmark/part2_retrieval/cache/embeddings.json",
+);
+
+let embedCache: Record<string, number[]> | null | undefined;
+function embeddingCache(): Record<string, number[]> | null {
+  if (embedCache === undefined) {
+    embedCache = existsSync(EMBED_CACHE)
+      ? JSON.parse(readFileSync(EMBED_CACHE, "utf8"))
+      : null;
+  }
+  return embedCache ?? null;
+}
+
+export const hasEmbeddingCache = () => embeddingCache() !== null;
+
+// The cache stores raw API values; the production provider unit-normalizes
+// before indexing (innerproduct == cosine), so match it here.
+export function cachedVector(
+  text: string,
+  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY",
+): number[] {
+  const key = createHash("sha1").update(`${taskType}\x00${text}`, "utf8").digest("hex");
+  const raw = embeddingCache()?.[key];
+  if (!raw) {
+    throw new Error(
+      `embedding cache miss for ${taskType} ${JSON.stringify(text.slice(0, 60))} — ` +
+        `rebuild ${EMBED_CACHE} with benchmark/part2_retrieval/03_index_opensearch.py + 04_run_queries.py`,
+    );
+  }
+  const norm = Math.sqrt(raw.reduce((s, x) => s + x * x, 0)) || 1;
+  return raw.map((x) => x / norm);
+}
+
+export function corpusDocVector(doc: {
+  title?: string;
+  product_type?: string;
+  tags?: string[];
+  body?: string;
+}): number[] {
+  const text = composeEmbeddingInput({
+    title: doc.title ?? "",
+    productType: doc.product_type ?? "",
+    tags: doc.tags ?? [],
+    body: doc.body ?? "",
+  });
+  return cachedVector(text, "RETRIEVAL_DOCUMENT");
 }
 
 // Field weights carried over from the benchmark's 04_run_queries.py, plus

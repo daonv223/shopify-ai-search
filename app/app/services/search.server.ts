@@ -94,7 +94,7 @@ export type LexicalResult = {
   exactMatchCount: number;
 };
 
-const SOURCE_FIELDS = [
+export const SOURCE_FIELDS = [
   "product_id",
   "handle",
   "title",
