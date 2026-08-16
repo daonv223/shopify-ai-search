@@ -1,27 +1,29 @@
 # Phase 3 Spec — Retrieval Pipeline
 
-> Phase 3 of `specs/task-breakdown.md` (~15 days). Inputs: `specs/specs.md`
-> §2.3–§2.4 (filter extraction, embedding layer), §5 (acceptance tiers), the
-> Phase 0 verdict in `benchmark/part2_retrieval/verdict.md` (fusion design and
-> its known failure mode), and the Phase 2 analyzer stack now live in
+> Phase 3 of `specs/task-breakdown.md` (~10 days). Inputs: `specs/specs.md`
+> §2.4 (embedding layer), §5 (acceptance tiers), the Phase 0 verdict in
+> `benchmark/part2_retrieval/verdict.md` (fusion design and its known failure
+> mode), and the Phase 2 analyzer stack now live in
 > `app/app/services/opensearch.server.ts` (bare + `.morph` fields, harness in
-> `app/tests/nlp/`). The typo leg is gone (descoped 2026-08-11), which
-> simplifies the fusion from the benchmark's 3-leg candidate to 2 legs.
+> `app/tests/nlp/`). The typo leg is gone (descoped 2026-08-11) and the
+> query→filter extraction leg is gone (descoped 2026-08-16), which simplifies
+> the fusion from the benchmark's 3-leg candidate to 2 legs.
 
 ## 1. Goal
 
 Turn the indexed catalog into a search engine: a query goes in, ranked
-products come out, with semantic recall and query-derived filters. At the end
-of this phase there is still **no storefront endpoint or UI** — the
-deliverable is an app-side search service (callable by Phase 4's app proxy
-route) plus the embedding pipeline that keeps vectors fresh, proven by the
-harness on the full §5 tier battery.
+products come out, with semantic recall. At the end of this phase there is
+still **no storefront endpoint or UI** — the deliverable is an app-side
+search service (callable by Phase 4's app proxy route) plus the embedding
+pipeline that keeps vectors fresh, proven by the harness on the full §5 tier
+battery.
 
 **Definition of done:** the harness passes all in-scope `specs.md` §5 tiers —
 Baseline, Stemming, Prefixes (no regression from Phase 2), plus the new
-Semantic and Filters tiers — against the 499-product corpus with vectors
-populated; overall hybrid hit@10 at or above the benchmark's 87%; and the dev
-store re-embeds only stale products after a text edit.
+Semantic tier — against the 499-product corpus with vectors populated;
+overall hybrid hit@10 at or above the benchmark's 87%; and the dev store
+re-embeds only stale products after a text edit. (The Filters tier is out of
+scope — see §3.4.)
 
 ### A note on where this code lives
 
@@ -78,7 +80,7 @@ app-proxy HTTP endpoint; this phase can exercise it directly from tests.
   only stale products, ever. Basic retry with backoff on 429/5xx; hard rate
   limits and cost guards are Phase 5.3.
 - Query-side embedding (`RETRIEVAL_QUERY`) exposed for 3.3 — with an eye on
-  latency (see A8/open question 2).
+  latency (see A8/open question 1).
 
 ### 3.3 Hybrid ranking (task 3.3 · 4d)
 
@@ -98,7 +100,15 @@ app-proxy HTTP endpoint; this phase can exercise it directly from tests.
   Baseline/Stemming/Prefixes. The benchmark says this is reachable: kNN alone
   scored 95% on the semantic tier and ranked all six body oils at 1–6.
 
-### 3.4 Query→filter extraction (task 3.4 · 5d)
+### 3.4 Query→filter extraction — DESCOPED (2026-08-16)
+
+Dropped from v1 after review; the first release will not derive structured
+filters from query text. This removes the Filters tier from the definition of
+done, acceptance tests A6/A7, and open questions 1 and 4. The full design is
+preserved below verbatim for a later phase; nothing in §3.1–3.3 depends on it
+(filters were going to feed both legs, but v1 ships without that narrowing).
+
+<details><summary>Preserved design (not implemented in v1)</summary>
 
 The second-hardest piece; reuses Phase 2 morphology rather than reimplementing it.
 
@@ -128,10 +138,11 @@ The second-hardest piece; reuses Phase 2 morphology rather than reimplementing i
 - Output feeds both legs: filters apply to the lexical query and as a kNN
   filter, so semantic recall respects them too.
 
+</details>
+
 **Suggested build order**: 3.1 and 3.2 in parallel (independent), then 3.3 on
-top of both, then 3.4 (needs 3.1's query path and Phase 2's analyzer, benefits
-from 3.3 being stable when measuring). Extend the harness tier-by-tier
-*before* tuning each piece, red-to-green, per the Phase 2 pattern.
+top of both. Extend the harness tier-by-tier *before* tuning each piece,
+red-to-green, per the Phase 2 pattern.
 
 ## 4. Non-goals (Phase 3)
 
@@ -142,13 +153,16 @@ from 3.3 being stable when measuring). Extend the harness tier-by-tier
 - Rate-limit hardening, cost guards, reconciliation — Phase 5.3 (3.2 ships
   basic retry only).
 - Typo tolerance — descoped from v1 (`specs.md` §2.2); no fuzzy leg returns.
+- Query→filter extraction — descoped from v1 (`specs.md` §2.3); the engine
+  does not derive structured filters from query text. The Filters acceptance
+  tier (§5) and the design (§3.4) are preserved for a later phase.
 - Ktiv male/haser normalization, price-range query parsing, negation
   ("בלי כחול") — out.
 
 ## 5. Acceptance tests
 
 Harness tests run against the seeded 499-product corpus (now with vectors);
-A7–A8 measured, A2 also verified on the dev store.
+A8 measured, A2 also verified on the dev store.
 
 | # | Test | Required outcome |
 |---|---|---|
@@ -157,25 +171,15 @@ A7–A8 measured, A2 also verified on the dev store.
 | A3 | Hybrid regression: full harness, Baseline/Stemming/Prefixes tiers | No regression from Phase 2 (0.833 / 0.967 / 1.0 hit@10); overall hybrid hit@10 ≥ 85% (benchmark `hybrid_morph`: 87%) |
 | A4 | Semantic tier: `נצנצים לגוף`, `ברק לעור`, `body oil` | Ground-truth product in **top 5** — the spec's "at least parity with native" bar |
 | A5 | Lexical-leg gating: `body oil` (cross-language, zero lexical signal) | Top 5 are body oils, no haircare injection — the verdict's self-inflicted loss stays fixed; kNN-alone and hybrid results near-identical on this query |
-| A6 | Filters tier: attribute queries phrased against corpus attributes, each attribute word in ≥2 inflections | Same filter extracted for every inflection; result set narrowed (AND), strictly a subset of the unfiltered query; residual terms still retrieved. Ground truth authored in this phase — the Phase 0 benchmark never tested this tier (spec §5's sunglasses examples don't exist in the corpus) |
-| A7 | Filter false-positive guard | Queries with no attribute words (`שמן גוף`, `שימר`) extract **zero** filters — extraction must not eat ordinary queries |
-| A8 | Latency: hybrid query end-to-end server-side, p95, incl. query embedding | Measured and recorded. Lexical-only p95 must stay <100ms (Phase 4 type-ahead budget); if the Gemini query-embedding round trip pushes the full hybrid past budget, that finding + mitigation options go to Phase 4 (see open question 2) — measuring it now is the acceptance, fixing it is not |
+| A8 | Latency: hybrid query end-to-end server-side, p95, incl. query embedding | Measured and recorded. Lexical-only p95 must stay <100ms (Phase 4 type-ahead budget); if the Gemini query-embedding round trip pushes the full hybrid past budget, that finding + mitigation options go to Phase 4 (see open question 1) — measuring it now is the acceptance, fixing it is not |
 
 ## 6. Open questions (carry forward, non-blocking)
 
-1. **Filters-tier ground truth** — the frozen corpus is cosmetics; which
-   attributes (e.g. scent family, skin type, size from `option_facets`) give
-   an honest tier battery? Authored during 3.4; keep the queries in the
-   dataset repo so Phase 5.2 inherits them.
-2. **Query-embedding latency vs the type-ahead budget** — a live Gemini call
+1. **Query-embedding latency vs the type-ahead budget** — a live Gemini call
    per keystroke likely blows <100ms. Phase 4 options, informed by A8's
    numbers: lexical-only type-ahead with hybrid on the results page,
    debounce + embed only "settled" queries, or a query-embedding cache.
    Decide in Phase 4, with data.
-3. **kNN candidate depth & recall** — top-50 with default HNSW `ef_search`
+2. **kNN candidate depth & recall** — top-50 with default HNSW `ef_search`
    matches the benchmark at 499 products; unmeasured at 10k+. Revisit in
    Phase 5.3 alongside the multiplexer index-bloat question.
-4. **Vocabulary-match ambiguity** — an attribute value that is also a common
-   product word could over-filter (the closed vocabulary bounds but doesn't
-   eliminate this). If A7-style guards prove insufficient on real catalogs,
-   fall back to requiring residual query terms before applying any filter.

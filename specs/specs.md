@@ -54,18 +54,15 @@ gap remains documented in §1 as research evidence. The validated design
 keyboard-adjacency weighting) is preserved in the Phase 0 benchmark and
 `specs/hebrew-nlp/phase2-notes.md` should it be revived.
 
-### 2.3 Query → filter extraction (must-have)
+### 2.3 Query → filter extraction — REMOVED (descoped 2026-08-16)
 
-- Recognize attribute values (color, size, material, gender…) inside free-text queries
-  and apply them as structured filters: `משקפי שמש ירוקות` → search "sunglasses" +
-  filter color=green.
-- Sources for attribute vocabulary: product options, variant titles, metafields, and
-  Shopify Standard Product Taxonomy category metafields — including attributes that
-  are **not** in the title/description (native search only indexes
-  title/type/body/tag/vendor/variant fields; metafields are not indexed at all).
-- Extracted filters narrow results (AND semantics), not merely boost them.
-- Must handle the attribute word in any Hebrew inflection (gender/number agreement:
-  `ירוק`/`ירוקה`/`ירוקים`/`ירוקות`).
+Dropped from v1 after review; the app will not derive structured filters from
+free-text query text in the first release. The native gap remains documented
+in §1 (gap #5) as research evidence. The validated design (attribute
+vocabulary from options/variants/metafields/taxonomy, inflection-tolerant
+matching reusing Phase 2 morphology, AND-semantics narrowing) is preserved
+in `specs/retrieval-pipeline/spec.md` §3.4 and Phase 3 task 3.4 should it be
+revived in a later phase.
 
 ### 2.4 Semantic/embedding recall layer (supporting, not headline)
 
@@ -105,6 +102,10 @@ keyboard-adjacency weighting) is preserved in the Phase 0 benchmark and
 - **Typo tolerance** (`שדקים` → `שקדים`, keyboard-adjacency errors) — descoped
   2026-08-11 after review (see §2.2); the native gap stays in §1 as research
   evidence only.
+- **Query→filter extraction** (deriving structured facets from free-text query
+  text, e.g. "green sunglasses" → color=green) — descoped 2026-08-16 after
+  review (see §2.3); the native gap stays in §1 (gap #5) as research evidence
+  only.
 - **Ktiv male/haser & spelling-variance normalization** (`זהר` ↔ `זוהר`, geresh
   variants, Hebrew↔Latin transliteration) — verified as a native gap, deferred to a
   later version.
@@ -128,7 +129,6 @@ store data: L'Occitane IL product `שמן גוף & שימר שקדים למרא�
 | Baseline | `שמן גוף`, `שימר`, `שקדים` | Exact matches returned, target in top results |
 | Stemming | `שקד`, `שמנים`, `שמני גוף` | Plural↔singular resolved; `שמנים` returns body oils, not shampoos |
 | Prefixes | `מראה`, `שמן לגוף`, `בשמן`, `השמן`, `ושקדים` | Prefixed/bare forms match |
-| Filters | `משקפי שמש ירוקות`, "green sunglasses" | Color facet applied, results narrowed |
 | Semantic | `נצנצים לגוף`, `ברק לעור`, `body oil` | At least parity with native (target product top-5) |
 
 ## 6. Open Questions / Pre-Build Validation

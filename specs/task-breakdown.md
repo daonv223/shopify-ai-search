@@ -2,7 +2,7 @@
 
 > Decomposed from `specs.md` (2026-07-27). Estimates are ideal dev-days for one
 > experienced full-stack developer familiar with Shopify apps but not necessarily
-> with Hebrew NLP. **Total: ~55–65 days (~11–13 weeks) for v1.**
+> with Hebrew NLP. **Total: ~50–60 days (~10–12 weeks) for v1.**
 
 ## Phase 0 — Pre-build validation (spec §6) · ~4 days
 
@@ -38,14 +38,14 @@ The differentiator and the highest-uncertainty work.
 | 2.4 | ~~Typo tolerance~~ — **descoped 2026-08-11**, not in v1 | — | Fuzzy leg + keyboard-adjacency weighting dropped after review; design preserved in the Phase 0 benchmark and `specs/hebrew-nlp/phase2-notes.md` if revived |
 | 2.5 | NLP unit-test harness seeded with the spec §5 acceptance queries | 1d | Build early so 2.2–2.3 develop against it |
 
-## Phase 3 — Retrieval pipeline · ~15 days
+## Phase 3 — Retrieval pipeline · ~10 days
 
 | # | Subtask | Est. | Notes |
 |---|---------|------|-------|
 | 3.1 | Lexical search over normalized index, all fields incl. metafields, field-weighted scoring | 3d | |
 | 3.2 | Embedding layer: pluggable provider interface (Gemini/OpenAI), batch embedding on ingest, re-embed on change | 3d | Provider chosen in 0.1 |
 | 3.3 | Hybrid ranking: merge lexical + vector results, tune so semantic queries hit "at least parity with native" (Tier-5 target: product in top 5) | 4d | Tuning-heavy; budget iteration time |
-| 3.4 | Query→filter extraction: build attribute vocabulary from options/variants/metafields/taxonomy, match attribute words in any inflection (`ירוק/ירוקה/ירוקים/ירוקות`), apply as AND filters | 5d | Second-hardest piece; the inflection matching reuses Phase 2 morphology |
+| 3.4 | ~~Query→filter extraction~~ — **descoped 2026-08-16**, not in v1 | — | Attribute vocabulary from options/variants/metafields/taxonomy + inflection-tolerant matching (reusing Phase 2 morphology) + AND filters dropped after review; design preserved in `specs/retrieval-pipeline/spec.md` §3.4 if revived in a later phase |
 
 ## Phase 4 — Storefront surfaces · ~10 days
 
@@ -65,7 +65,7 @@ The differentiator and the highest-uncertainty work.
 
 ## Notes
 
-- **Critical path**: 0.1 → 0.3 → 1.4 → Phase 2 → 3.3/3.4. Phases 1 and 2 can run
+- **Critical path**: 0.1 → 0.3 → 1.4 → Phase 2 → 3.3. Phases 1 and 2 can run
   in parallel with two people, compressing the calendar to ~7–8 weeks.
 - **Biggest risks**: 2.3 (Hebrew stemming quality) and 3.3 (beating native semantic
   quality on Tier-5, since the app *replaces* native search outright). If 3.3 can't
