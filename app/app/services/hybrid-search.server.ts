@@ -7,9 +7,25 @@
 // exact-field matches means the query doesn't speak the corpus's language
 // lexically — whatever the leg ranked is morph/noise artifacts that must not
 // outvote a clean kNN ranking, so the leg is dropped from the fusion entirely.
-// Escalation path if the harness ever shows this cliff-edge rule failing
-// (an incidental literal token opening the gate at full fusion weight):
-// weight the leg by exactMatchCount instead.
+//
+// Architecture-review finding 2 asked for a stricter, observable signal. The
+// lexical leg now reports a high-signal split (search.server.ts: bare hits on
+// title/tags/product_type/variant_titles/option_values/vendor/category_name/
+// sku/barcode vs body/metafield_text) and `highSignalMatchCount` is exposed
+// here as a shadow diagnostic — but it is NOT the gate. Both candidate rules
+// have a measured failure on the frozen corpus (hybrid.test.ts A5b/A5d):
+//   - `exactMatchCount === 0` (this gate) is too permissive on `ברק לעור`:
+//     `ברק` hits 143 bodies, `לעור` 6 titles; the body noise enters the fusion
+//     and kNN's 100% degrades to 83% (still over the A4 bar).
+//   - `highSignalMatchCount === 0` is too strict on `מראה`: 41 body-only
+//     exact hits, 0 high-signal, so the leg would be dropped — but those body
+//     hits carry 5/6 positives while kNN (מראה = mirror) finds 2/6, and the
+//     prefixes tier falls 0.938 → 0.818, under its 0.9 bar.
+// A doc-count rule at either granularity cannot separate these two; the
+// escalation path is per-token analysis (does EACH query token hit a
+// high-signal field?) or a doc-frequency/IDF-style concentration signal
+// (`ברק` matches 29% of the catalog, `מראה` 8%), tuned against the frozen v1
+// benchmark (review finding 3) rather than against either single query.
 import { embedQuery } from "./embedding.server";
 import { opensearch } from "./opensearch.server";
 import { SOURCE_FIELDS, lexicalSearch, type LexicalHit } from "./search.server";
@@ -43,7 +59,7 @@ export async function knnSearch(
   }));
 }
 
-export type HybridHit = Omit<LexicalHit, "score" | "exact"> & {
+export type HybridHit = Omit<LexicalHit, "score" | "exact" | "highSignal"> & {
   score: number; // RRF score
   lexicalRank?: number; // 1-based rank within each leg (fusion diagnostics)
   knnRank?: number;
@@ -52,6 +68,7 @@ export type HybridHit = Omit<LexicalHit, "score" | "exact"> & {
 export type HybridResult = {
   hits: HybridHit[];
   exactMatchCount: number; // over the lexical leg's LEG_DEPTH candidates
+  highSignalMatchCount: number; // shadow diagnostic, not the gate (see header)
   gated: boolean; // lexical leg dropped from the fusion (zero exact matches)
 };
 
@@ -95,7 +112,12 @@ export async function hybridSearchWithVector(
   const hits = [...fused.values()]
     .sort((a, b) => b.score - a.score || a.handle.localeCompare(b.handle))
     .slice(0, size);
-  return { hits, exactMatchCount: lex.exactMatchCount, gated };
+  return {
+    hits,
+    exactMatchCount: lex.exactMatchCount,
+    highSignalMatchCount: lex.highSignalMatchCount,
+    gated,
+  };
 }
 
 const display = ({

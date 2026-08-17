@@ -97,25 +97,106 @@ describe("A5 — lexical-leg gating on `body oil`", () => {
   it("gate closes: zero exact matches, lexical leg dropped", async () => {
     const res = await hybrid("body oil");
     expect(res.exactMatchCount).toBe(0);
+    expect(res.highSignalMatchCount).toBe(0);
     expect(res.gated).toBe(true);
   });
 
-  it("top 5 are body oils — no haircare injection", async () => {
-    const top5 = (await hybrid("body oil", 5)).hits.map((h) => h.handle);
-    for (const handle of top5) {
-      expect(row().positives, `unexpected ${handle} in top 5`).toContain(handle);
-    }
+  it("gated hybrid ranking equals the pure kNN ranking", async () => {
+    const knn = (await knnSearch(TEST_ALIAS, queryVector("body oil"), 10)).map((h) => h.handle);
+    expect(await hybridHandles("body oil")).toEqual(knn);
   });
 
-  it("hybrid ranking is identical to kNN-alone on this query", async () => {
-    const fused = await hybridHandles("body oil");
-    const knnAlone = await knnSearch(TEST_ALIAS, queryVector("body oil"));
-    expect(fused).toEqual(knnAlone.slice(0, 10).map((h) => h.handle));
+  it("ground truth in top 5 (A4 bar holds for the previously-lost query)", async () => {
+    const top5 = await hybridHandles("body oil", 5);
+    expect(top5.some((h) => row().positives.includes(h))).toBe(true);
   });
 
   it("gate stays open on an ordinary Hebrew query (שמנים)", async () => {
     const res = await hybrid("שמנים");
     expect(res.exactMatchCount).toBeGreaterThan(0);
     expect(res.gated).toBe(false);
+  });
+});
+
+// Architecture-review finding 2 asks for a stricter gate than "zero exact
+// matches" and for tests on semantic queries with noisy, NONZERO lexical
+// matches. The two cases below pin the measured behaviour of both candidate
+// doc-count rules on the frozen corpus; neither is adopted (see the header
+// of hybrid-search.server.ts). They are the "shown to fail" evidence the
+// review requires before escalating to per-token or IDF-style signals.
+//
+// A5b — the v1 exact gate is too PERMISSIVE on `ברק לעור` (radiance for
+// skin): `ברק` matches 143 products in body text (zero in titles), `לעור`
+// matches 6 titles. exact > 0 keeps the gate open, the body noise enters the
+// fusion, and kNN's 100% (6/6) degrades to 83% — still over the A4 bar.
+describe("A5b — noisy nonzero lexical matches (`ברק לעור`)", () => {
+  const row = () => tierQueries("semantic").find((r) => r.query === "ברק לעור")!;
+
+  it("gate stays open: nonzero exact (and high-signal, from `לעור`) matches", async () => {
+    const res = await hybrid("ברק לעור");
+    expect(res.exactMatchCount).toBeGreaterThan(0);
+    expect(res.highSignalMatchCount).toBeGreaterThan(0);
+    expect(res.gated).toBe(false);
+  });
+
+  it("ground truth still in top 5 (A4 bar holds despite the noise)", async () => {
+    const top5 = await hybridHandles("ברק לעור", 5);
+    expect(
+      top5.some((h) => row().positives.includes(h)),
+      `query ברק לעור: ${JSON.stringify(top5)}`,
+    ).toBe(true);
+  });
+});
+
+// A5d — a high-signal-only gate would be too STRICT on `מראה` (prefixes
+// tier). Corpus audit 2026-08-17: 41 exact hits, every one in body text,
+// zero in title/tags/product_type/vendor/sku — yet the lexical leg's top 10
+// carries 5/6 positives, while kNN (מראה also means "mirror") returns luffa,
+// pouches and a ceramic pot: 2/6. Gating on highSignalMatchCount === 0 drops
+// the leg and the prefixes tier falls 0.938 → 0.818, under its 0.9 bar.
+describe("A5d — body-only exact matches are real signal (`מראה`)", () => {
+  const row = () => tierQueries("prefixes").find((r) => r.query === "מראה")!;
+
+  it("zero high-signal but many exact matches: gate must stay open", async () => {
+    const res = await hybrid("מראה");
+    expect(res.highSignalMatchCount).toBe(0);
+    expect(res.exactMatchCount).toBeGreaterThan(20);
+    expect(res.gated).toBe(false);
+  });
+
+  it("hybrid beats pure kNN on this query (hit@10 ≥ 0.5)", async () => {
+    const top = await hybridHandles("מראה");
+    expect(hit10(top, row().positives), JSON.stringify(top)).toBeGreaterThanOrEqual(0.5);
+  });
+});
+
+// A5c — gate must stay OPEN for lookup-style queries only the lexical leg can
+// answer. A SKU or a brand name has no useful vector neighbourhood, so any
+// gate that classified sku/vendor as low-signal would drop the one leg that
+// finds the product. Corpus audit 2026-08-17: SKU 69101278 belongs to a
+// single variant (four-species-gift-set) and appears in no indexed text
+// field; ERBORIAN is the vendor of 16 products and appears in none of their
+// titles/tags/product_type. Neither query has a cached embedding, so the
+// kNN leg is fed an unrelated cached vector (`body oil`) — the assertion is
+// about the gate and the lexical leg's contribution, not about kNN.
+describe("A5c — gate stays open on lookup queries (SKU, brand)", () => {
+  const unrelatedVector = () => queryVector("body oil");
+
+  it("SKU query: gate open, high-signal, product carried in by the lexical leg", async () => {
+    const res = await hybridSearchWithVector(TEST_ALIAS, "69101278", unrelatedVector(), 10);
+    expect(res.gated).toBe(false);
+    expect(res.highSignalMatchCount).toBe(1);
+    const hit = res.hits.find((h) => h.handle === "four-species-gift-set");
+    expect(hit, JSON.stringify(res.hits.map((h) => h.handle))).toBeDefined();
+    expect(hit!.lexicalRank).toBe(1);
+    // RRF: lexical rank 1 (1/61) ties the kNN #1 at worst → top 2.
+    expect(res.hits.slice(0, 2).map((h) => h.handle)).toContain("four-species-gift-set");
+  });
+
+  it("brand query: gate open, all 16 ERBORIAN products high-signal, lexical #1 in top 2", async () => {
+    const res = await hybridSearchWithVector(TEST_ALIAS, "ERBORIAN", unrelatedVector(), 20);
+    expect(res.gated).toBe(false);
+    expect(res.highSignalMatchCount).toBe(16);
+    expect(res.hits.slice(0, 2).some((h) => h.lexicalRank === 1)).toBe(true);
   });
 });

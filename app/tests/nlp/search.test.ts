@@ -109,10 +109,15 @@ describe("A1 — metafield_text coverage", () => {
       } as never,
     });
 
-    const { hits, exactMatchCount } = await lexicalSearch(TEST_ALIAS, TOKEN);
+    const { hits, exactMatchCount, highSignalMatchCount } = await lexicalSearch(TEST_ALIAS, TOKEN);
     expect(hits.map((h) => h.handle)).toContain(HANDLE);
     const hit = hits.find((h) => h.handle === HANDLE)!;
     expect(hit.exact).toBe(true); // metafield_text is a bare/exact field
+    // metafield_text is free-form text → low-signal (unlike sku/vendor/
+    // category_name, which are high-signal lookup fields). Diagnostic only:
+    // the v1 gate keys off `exact`, so this hit alone keeps the leg open.
+    expect(hit.highSignal).toBe(false);
     expect(exactMatchCount).toBeGreaterThanOrEqual(1);
+    expect(highSignalMatchCount).toBe(0);
   });
 });
