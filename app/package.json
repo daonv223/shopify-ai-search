@@ -14,6 +14,7 @@
     "setup": "prisma generate && prisma migrate deploy",
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
     "test": "vitest run",
+    "latency": "LATENCY_LIVE=1 vitest run tests/nlp/latency.test.ts --reporter=verbose",
     "nlp:audit": "tsx scripts/nlp-audit.ts",
     "migrate-index": "tsx scripts/migrate-index.ts",
     "shopify": "shopify",
