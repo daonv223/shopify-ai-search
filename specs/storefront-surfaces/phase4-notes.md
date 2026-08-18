@@ -321,3 +321,89 @@ anchored, hits, total, ms}`.
 - Redis for the LRU stays open question 2; the in-process cache is what
   makes fire-and-cache reach the results page — multi-instance needs a
   shared tier or sticky routing.
+
+## 3.2 / 3.3 — Theme app extension: dropdown, results block, fallback (2026-08-18)
+
+Shipped in `app/extensions/ai-search/` (scaffolded with `shopify app generate
+extension --template theme_app_extension`, sample files removed):
+
+- `blocks/embed.liquid` — app embed (`target: body`): writes
+  `window.AISearchConfig` (settings, proxy path, `shop.money_format`, locale
+  strings via the extension's `locales/*.json`), hides the theme's native
+  predictive dropdown with a `<style>` (Dawn selectors by default,
+  overridable), loads `ai-search.js` deferred. Settings: enable, max
+  suggestions 3–8, min chars, show prices/images, **Results page mode**
+  (`block` for OS 2.0 themes / `proxy` for vintage), selector overrides
+  (input, form, predictive, native results).
+- `blocks/results.liquid` — app block "AI Search results" (`target:
+  section`, added through *Add section → Apps* on the search template):
+  emits the hide-native `<style>` (Dawn `.shopify-section:has(>
+  .template-search)` etc., overridable) and a `[data-ai-search-results]`
+  host the script renders into. Settings: heading, products/page 12–48,
+  search box above the grid, count, selector override.
+- `assets/ai-search.js` (plain ES2019, no build) — three jobs:
+  1. **Type-ahead**: attaches to `form[action*="/search"] input[name="q"]`
+     (Dawn's modal + template inputs; MutationObserver for late DOM);
+     capture-phase `stopImmediatePropagation` on `input`/`focus` and the
+     keys we own silences Dawn's `<predictive-search>` without touching
+     theme code; Shadow DOM host (`position: fixed`, repositioned on
+     scroll/resize) with `dir="rtl"`; debounce 150ms, AbortController per
+     keystroke, min-chars, ArrowUp/Down + Enter (navigates to the active
+     product; otherwise the form submits normally), Escape (closes ours and
+     swallows the matching keyup so Dawn's modal stays open), Tab and
+     click-outside close; `role=combobox/listbox/option` + a light-DOM live
+     region (ARIA id refs can't cross the shadow boundary); "show all
+     results for q" row targets the form's action (so it follows the proxy
+     rewrite). **Upgrade re-fetch**: on `semantic: "timeout"` and an
+     unchanged, still-focused query, one re-request after 600ms swaps in
+     the hybrid ranking — the mechanism §A8 decided on.
+  2. **Results block**: reads `q`, fetches `/apps/search/results`, renders
+     grid + count + load-more in Shadow DOM, empty state; on failure removes
+     the hide-native style and links to `/search?q=…&ai=0` (which the
+     script honours: native shown, block not rendered) — never blank. A
+     stray hide-style on a page without the block is removed.
+  3. **Proxy mode**: rewrites the theme's search forms to `/apps/search`
+     (original action kept in a data attribute) and enhances the
+     server-rendered page's next link into fetch-based load-more.
+- `assets/ai-search.css` — Shadow-DOM-only styles, logical properties,
+  theme hooks via `--ai-search-*` custom properties.
+- `locales/en.default.json`, `locales/he.json` — editor labels (`t:` keys)
+  and shopper strings; Hebrew is what a Hebrew storefront renders.
+- `README.md` — merchant steps for OS 2.0 and vintage themes, behaviour
+  notes (the setup notes 5.1 will move into the embedded admin).
+
+Automated: `tests/storefront/ai-search-client.test.ts` (jsdom, 22 tests):
+interception silences theme listeners, 150ms debounce and exact request
+URL, abort on further typing, keyboard/Enter/Escape/click-outside, upgrade
+re-fetch (once, only if unchanged), fail-closed on errors, min-chars and cap,
+results block render/paginate/count, empty state, error → native un-hidden
++ link, `?ai=0`, stray-style cleanup, proxy form rewrite, show-all follows
+the rewrite, proxy-page load-more, `shop.money_format` variants.
+
+**Manual verification (B5–B8) is pending** — it needs `shopify app dev`
+with the dev store's storefront password (`--store-password`, prompted
+interactively; not available to the agent session), then in the theme
+editor: App embeds → AI Search on; Search template → Add section → Apps →
+AI Search results. Two facts to know before doing it:
+
+- The dev store index (`products_hebrew_ai_search_dev`, 200 docs) is a
+  shoe/fashion catalog with **no vectors** (`GEMINI_API_KEY` is empty in
+  `app/.env`, so the backfill skipped) — the endpoints answer lexical-only
+  there (`semantic: "off"`) and the §1 sales demo (`שמנים` → body oils) is
+  not reproducible on it as-is. For B8, either import the benchmark
+  catalog into the dev store or run the demo against a store carrying it,
+  and set `GEMINI_API_KEY` so the sweep embeds it.
+- Dev-store docs carry no `url` field; the client falls back to
+  `/products/{handle}` (as does the Liquid page).
+
+Checklist for the session (record screenshots here):
+- B5 desktop + mobile drawer on Dawn: type `שמנים`, `שמן לגוף`, `body oil`
+  — native dropdown gone, ours RTL with images/prices, arrows/Enter/Escape,
+  first paint then upgrade (~0.6s) once vectors exist.
+- B6 `/search?q=שמנים`, `נצנצים לגוף`, `זזזז` with the block: native
+  section hidden, grid = B2 top hits, empty state; stop the app → error
+  state shows the native link.
+- B7 a vintage theme (e.g. Debut / Simple from the theme library): embed
+  in proxy mode, form submits to `/apps/search?q=`, page renders in the
+  layout, RTL, prev/next paginate, load-more works.
+- B8 the demo screenshots.

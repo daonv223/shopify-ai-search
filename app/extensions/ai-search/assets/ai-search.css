@@ -1,0 +1,144 @@
+/* AI Search — styles for the Shadow DOM dropdown and results grid.
+   Loaded via <link> inside each shadow root, so theme CSS cannot leak in and
+   ours cannot leak out. Logical properties only (inline-start/end,
+   margin-inline) — RTL correctness comes from dir="rtl" on our roots, never
+   from the host page. Fonts/colours inherit from the theme through CSS
+   custom properties with plain fallbacks. */
+
+:host {
+  all: initial;
+  font-family: var(--ai-search-font, var(--font-body-family, inherit));
+  color: var(--ai-search-color, var(--color-foreground, inherit));
+  box-sizing: border-box;
+}
+*, *::before, *::after { box-sizing: inherit; }
+a { color: inherit; text-decoration: none; }
+img { display: block; max-width: 100%; }
+
+/* ---------- dropdown ---------- */
+.ai-panel {
+  direction: rtl;
+  text-align: start;
+  background: var(--ai-search-bg, #fff);
+  color: var(--ai-search-color, #111);
+  border: 1px solid var(--ai-search-border, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: 0.9375rem;
+  line-height: 1.35;
+}
+.ai-list { padding-block: 0.25rem; }
+.ai-option {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+.ai-option .ai-media { position: relative; }
+.ai-option .ai-img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.05);
+}
+.ai-option .ai-img--empty { display: block; width: 56px; height: 56px; border-radius: 6px; background: rgba(0, 0, 0, 0.05); }
+.ai-option .ai-title { display: block; grid-column: 2; }
+.ai-option .ai-price { display: block; grid-column: 2; opacity: 0.75; font-size: 0.875em; }
+.ai-option .ai-title + .ai-price { margin-block-start: -0.35rem; }
+.ai-option.is-active,
+.ai-option:hover { background: var(--ai-search-hover, rgba(0, 0, 0, 0.06)); }
+.ai-option .ai-badge {
+  position: absolute;
+  inset-block-end: 2px;
+  inset-inline-start: 2px;
+  font-size: 0.625rem;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 0 0.3em;
+  border-radius: 3px;
+}
+.ai-show-all {
+  display: block;
+  padding: 0.65rem 0.75rem;
+  border-block-start: 1px solid var(--ai-search-border, rgba(0, 0, 0, 0.12));
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ---------- results grid (block mode) ---------- */
+.ai-results {
+  direction: rtl;
+  text-align: start;
+  max-width: var(--ai-search-max-width, 1200px);
+  margin-inline: auto;
+  padding: 1.5rem 1rem;
+}
+.ai-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-block-end: 1.25rem;
+}
+.ai-input {
+  flex: 1;
+  min-inline-size: 0;
+  font: inherit;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--ai-search-border, rgba(0, 0, 0, 0.3));
+  border-radius: 4px;
+  background: var(--ai-search-bg, #fff);
+  color: inherit;
+}
+.ai-button {
+  font: inherit;
+  padding: 0.6rem 1.1rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: var(--ai-search-button-bg, #111);
+  color: var(--ai-search-button-color, #fff);
+  cursor: pointer;
+}
+.ai-button:disabled { opacity: 0.6; cursor: default; }
+.ai-heading { font-size: 1.6rem; font-weight: 600; margin: 0 0 0.25rem; }
+.ai-subheading { margin: 0 0 0.25rem; }
+.ai-count { opacity: 0.7; margin: 0 0 1rem; }
+.ai-status { min-height: 1.5em; margin: 0 0 1rem; }
+.ai-status a { text-decoration: underline; }
+.ai-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: 1.25rem 1rem;
+}
+.ai-grid .ai-card { display: block; }
+.ai-grid .ai-media { position: relative; display: block; }
+.ai-grid .ai-img,
+.ai-grid .ai-img--empty {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.05);
+}
+.ai-grid .ai-badge {
+  position: absolute;
+  inset-block-start: 0.5rem;
+  inset-inline-start: 0.5rem;
+  font-size: 0.75rem;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+}
+.ai-grid .ai-title { display: block; margin-block-start: 0.5rem; }
+.ai-grid .ai-price { display: block; opacity: 0.8; margin-block-start: 0.15rem; }
+.ai-more { display: block; margin: 2rem auto 0; }
+
+@media (max-width: 480px) {
+  .ai-results { padding: 1rem 0.75rem; }
+  .ai-grid { grid-template-columns: repeat(2, 1fr); gap: 1rem 0.75rem; }
+}

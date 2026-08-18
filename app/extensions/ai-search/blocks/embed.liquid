@@ -1,0 +1,88 @@
+{%- comment -%}
+  AI Search — app embed (Phase 4 spec §3.2/§3.3). Loaded on every storefront
+  page when the merchant enables it in the theme editor (Theme settings →
+  App embeds → AI Search). Intercepts the theme's search inputs and forms,
+  suppresses the native predictive dropdown, mounts ours, and — depending
+  on "Results page" — hides the theme's native results section when the
+  "AI Search results" app block is on the search template, or points the
+  search form at the app-proxy results page for themes without app blocks.
+{%- endcomment -%}
+{%- if block.settings.enabled -%}
+  {%- liquid
+    assign proxy = '/apps/search'
+    assign is_search = false
+    if template.name == 'search'
+      assign is_search = true
+    endif
+  -%}
+  <style id="ai-search-native-predictive">
+    {{ block.settings.predictive_selector | default: 'predictive-search .predictive-search, [data-predictive-search], #predictive-search-results, .predictive-search__results, .search-modal__content .predictive-search' }} { display: none !important; }
+  </style>
+  <script>
+    window.AISearchConfig = {
+      enabled: true,
+      proxy: {{ proxy | json }},
+      cssUrl: {{ 'ai-search.css' | asset_url | json }},
+      resultsMode: {{ block.settings.results_mode | json }},
+      maxSuggestions: {{ block.settings.max_suggestions | default: 6 }},
+      showPrices: {{ block.settings.show_prices | json }},
+      showImages: {{ block.settings.show_images | json }},
+      minChars: {{ block.settings.min_chars | default: 1 }},
+      inputSelector: {{ block.settings.input_selector | strip | json }},
+      formSelector: {{ block.settings.form_selector | strip | json }},
+      nativeResultsSelector: {{ block.settings.native_results_selector | strip | json }},
+      isSearchPage: {{ is_search | json }},
+      searchTerms: {{ search.terms | default: '' | json }},
+      searchUrl: {{ routes.search_url | json }},
+      moneyFormat: {{ shop.money_format | json }},
+      locale: {{ request.locale.iso_code | json }},
+      text: {
+        showAll: {{ 'ai_search.show_all' | t | json }},
+        noResults: {{ 'ai_search.no_results' | t | json }},
+        loadMore: {{ 'ai_search.load_more' | t | json }},
+        loading: {{ 'ai_search.loading' | t | json }},
+        error: {{ 'ai_search.error' | t | json }},
+        nativeLink: {{ 'ai_search.native_link' | t | json }},
+        soldOut: {{ 'ai_search.sold_out' | t | json }},
+        resultsFor: {{ 'ai_search.results_for' | t | json }},
+        resultsCount: {{ 'ai_search.results_count' | t | json }},
+        statusResults: {{ 'ai_search.status_results' | t | json }},
+        searchPlaceholder: {{ 'ai_search.search_placeholder' | t | json }},
+        searchButton: {{ 'ai_search.search_button' | t | json }}
+      }
+    };
+  </script>
+  <script src="{{ 'ai-search.js' | asset_url }}" defer></script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "t:embed.name",
+  "target": "body",
+  "settings": [
+    { "type": "checkbox", "id": "enabled", "label": "t:embed.enabled.label", "default": true },
+    { "type": "header", "content": "t:embed.predictive_header" },
+    { "type": "range", "id": "max_suggestions", "label": "t:embed.max_suggestions.label", "min": 3, "max": 8, "step": 1, "default": 6 },
+    { "type": "range", "id": "min_chars", "label": "t:embed.min_chars.label", "min": 1, "max": 3, "step": 1, "default": 1 },
+    { "type": "checkbox", "id": "show_prices", "label": "t:embed.show_prices.label", "default": true },
+    { "type": "checkbox", "id": "show_images", "label": "t:embed.show_images.label", "default": true },
+    { "type": "header", "content": "t:embed.results_header" },
+    {
+      "type": "select",
+      "id": "results_mode",
+      "label": "t:embed.results_mode.label",
+      "info": "t:embed.results_mode.info",
+      "options": [
+        { "value": "block", "label": "t:embed.results_mode.block" },
+        { "value": "proxy", "label": "t:embed.results_mode.proxy" }
+      ],
+      "default": "block"
+    },
+    { "type": "header", "content": "t:embed.advanced_header" },
+    { "type": "text", "id": "input_selector", "label": "t:embed.input_selector.label", "info": "t:embed.input_selector.info" },
+    { "type": "text", "id": "form_selector", "label": "t:embed.form_selector.label", "info": "t:embed.form_selector.info" },
+    { "type": "text", "id": "predictive_selector", "label": "t:embed.predictive_selector.label", "info": "t:embed.predictive_selector.info" },
+    { "type": "text", "id": "native_results_selector", "label": "t:embed.native_results_selector.label", "info": "t:embed.native_results_selector.info" }
+  ]
+}
+{% endschema %}
