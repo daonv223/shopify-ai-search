@@ -28,10 +28,42 @@
 // benchmark (review finding 3) rather than against either single query.
 import { embedQuery } from "./embedding.server";
 import { opensearch } from "./opensearch.server";
-import { SOURCE_FIELDS, lexicalSearch, type LexicalHit } from "./search.server";
+import {
+  SOURCE_FIELDS,
+  lexicalSearch,
+  type LexicalHit,
+  type LexicalMode,
+  type LexicalResult,
+} from "./search.server";
 
-const LEG_DEPTH = 50; // benchmark parity — candidates per leg fed into the fusion
+// Benchmark parity — candidates per leg fed into the fusion. The results page
+// runs at this depth; the type-ahead passes a shallower per-surface depth
+// (Phase 4 spec §2 "surfaces").
+export const LEG_DEPTH = 50;
 const RRF_K = 60;
+
+// Semantic-anchor floor (Phase 4, phase4-notes.md "empty state"): kNN always
+// returns k neighbours, so a gated query (zero lexical exact matches) would
+// otherwise never be empty — `זזזז` would show 50 products. faiss innerproduct
+// scores unit vectors as 1 + cosine; probed on the frozen corpus with live
+// gemini-embedding-001 vectors (2026-08-18): junk / out-of-catalog queries
+// top out at 1.625–1.682 (`זזזז`, `asdfgh`, `מקדחה חשמלית`, `טלפון סלולרי`),
+// real semantic queries start at 1.703 (`moisturizer`, `body oil` 1.706,
+// `shampoo` 1.708, `ברק לעור` 1.732, `נצנצים לגוף` 1.743). Query-level, on
+// the top-1 only, and only when the lexical leg is gated: a per-hit floor
+// would cut real recall (`body oil`'s own top-10 dips to 1.683), and an
+// un-gated query has lexical evidence that it belongs to the catalog. The
+// gap is narrow (0.02) — logged per request (`knn_top`) so it can be
+// re-calibrated on real traffic.
+export const KNN_ANCHOR_MIN_SCORE = 1.69;
+
+export type HybridOptions = LexicalMode & {
+  depth?: number; // candidates per leg (default LEG_DEPTH)
+  // A lexical leg already in flight (same alias/query/depth/mode) — the
+  // storefront surfaces start it before waiting on the query embedding so a
+  // cold-cache type-ahead costs max(timeout, lexical), not the sum.
+  lexical?: Promise<LexicalResult>;
+};
 
 export type KnnHit = Omit<LexicalHit, "exact">;
 
@@ -67,32 +99,43 @@ export type HybridHit = Omit<LexicalHit, "score" | "exact" | "highSignal"> & {
 
 export type HybridResult = {
   hits: HybridHit[];
-  exactMatchCount: number; // over the lexical leg's LEG_DEPTH candidates
+  exactMatchCount: number; // over the lexical leg's `depth` candidates
   highSignalMatchCount: number; // shadow diagnostic, not the gate (see header)
   gated: boolean; // lexical leg dropped from the fusion (zero exact matches)
+  knnTopScore: number | null; // kNN leg's best score (null: leg not run)
+  anchored: boolean; // false when gated AND kNN top-1 < KNN_ANCHOR_MIN_SCORE → no hits
+  fusedCount: number; // distinct candidates across both legs (before `size`)
+  lexicalTotal: number; // lexical leg's total matching docs (results-page tail)
 };
 
 export async function hybridSearch(
   alias: string,
   query: string,
   size = 10,
+  opts: HybridOptions = {},
 ): Promise<HybridResult> {
-  return hybridSearchWithVector(alias, query, await embedQuery(query), size);
+  return hybridSearchWithVector(alias, query, await embedQuery(query), size, opts);
 }
 
 // Split from hybridSearch so the harness can inject cached query vectors and
-// run the full fusion without a Gemini key.
+// run the full fusion without a Gemini key. `queryVector: null` runs the
+// lexical leg alone through the same shape (the type-ahead's cold-cache and
+// partial-token paths) — no gate applies, since there is nothing to protect
+// from the leg.
 export async function hybridSearchWithVector(
   alias: string,
   query: string,
-  queryVector: number[],
+  queryVector: number[] | null,
   size = 10,
+  { depth = LEG_DEPTH, typeahead = false, lexical }: HybridOptions = {},
 ): Promise<HybridResult> {
   const [lex, knn] = await Promise.all([
-    lexicalSearch(alias, query, LEG_DEPTH),
-    knnSearch(alias, queryVector, LEG_DEPTH),
+    lexical ?? lexicalSearch(alias, query, depth, { typeahead }),
+    queryVector ? knnSearch(alias, queryVector, depth) : Promise.resolve([]),
   ]);
-  const gated = lex.exactMatchCount === 0;
+  const gated = queryVector !== null && lex.exactMatchCount === 0;
+  const knnTopScore = knn.length ? knn[0].score : null;
+  const anchored = !gated || (knnTopScore !== null && knnTopScore >= KNN_ANCHOR_MIN_SCORE);
 
   const fused = new Map<string, HybridHit>();
   const addLeg = (
@@ -107,7 +150,7 @@ export async function hybridSearchWithVector(
     });
   };
   if (!gated) addLeg(lex.hits, "lexicalRank");
-  addLeg(knn, "knnRank");
+  if (anchored) addLeg(knn, "knnRank");
 
   const hits = [...fused.values()]
     .sort((a, b) => b.score - a.score || a.handle.localeCompare(b.handle))
@@ -117,6 +160,10 @@ export async function hybridSearchWithVector(
     exactMatchCount: lex.exactMatchCount,
     highSignalMatchCount: lex.highSignalMatchCount,
     gated,
+    knnTopScore,
+    anchored,
+    fusedCount: fused.size,
+    lexicalTotal: lex.total,
   };
 }
 

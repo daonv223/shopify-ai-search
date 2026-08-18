@@ -46,6 +46,67 @@ const MORPH_FIELDS = HIGH_SIGNAL_MORPH_FIELDS.map(([f, w]) =>
   w === 1 ? `${f}.morph` : `${f}.morph^${w}`,
 ).concat(["body.morph"]);
 
+// Type-ahead prefix clause (Phase 4 spec §2 "partial-token handling"): the
+// trailing token of a query being typed is a prefix, so `שמ` must meet
+// `שמנים`. A raw `prefix` query per bare field on the app-side normalized
+// last token (lowercase + final-letter folding, mirroring the `hebrew_text`
+// analyzer — a typed `שמן` becomes the prefix `שמנ` and meets שמנים/שמני/שמן
+// alike). Rewrite `top_terms_blended_freqs_N`: the expansions are BM25-scored
+// with one blended document frequency, so a prefix hit is a mild, bounded
+// signal — ties among the 58 שמן/שמפו/שמנים titles break on tf/title length
+// instead of index order (what `bool_prefix`'s constant score gives), yet
+// three rare `ג…` words in a gel title cannot outvote an exact `שמן` in an
+// oil's title (what `scoring_boolean`'s per-term IDF sum did on `שמן ג`).
+// N bounds the clause count on 1-char prefixes at any catalog size.
+// High-signal fields at the exact_high weights for any prefix length;
+// `body` at its low weight only once the token has PREFIX_BODY_MIN_CHARS —
+// long prose would let two letters match half the catalog, but a concept
+// that lives only in body copy (`מראה`, A5d) must still type-ahead.
+const PREFIX_FIELDS: [string, number][] = HIGH_SIGNAL_MORPH_FIELDS.filter(([f]) =>
+  ["title", "tags", "product_type", "vendor"].includes(f),
+).map(([f, w]) => [f, w * BARE_UPLIFT]);
+const PREFIX_BODY_FIELD: [string, number] = ["body", 1];
+export const PREFIX_BODY_MIN_CHARS = 3;
+const PREFIX_REWRITE = "top_terms_blended_freqs_100";
+
+// Hebrew clitic on a partial token: the analyzer's `he_strip_prefix`
+// (opensearch.server.ts HE_PREFIX) drops a leading ו/ב/ל/מ/כ/ה/ש only from a
+// complete word with ≥3 letters after it, so a half-typed `לגו` (→ לגוף) or
+// `בשמ` (→ בשמן) carries no evidence toward גוף / שמן. The type-ahead adds a
+// second, half-weight prefix variant with the clitic stripped, permissive
+// (any letter after it) because the word is still growing — `לג` → `ג` is
+// what lets `שמן לג` prefer `שמן גוף` over `באלם לגוף`. Half weight and the
+// blended-frequency rewrite keep the false-clitic noise (`שמנ` → `מנ…`, `שק`
+// → `ק…`) at tie-break level under the unstripped prefix and the other
+// tokens' clauses; measured on the harness (surface.test.ts B3).
+const HE_CLITIC_PARTIAL = /^[ובלמכהש](?=[א-ת]+$)/;
+const CLITIC_VARIANT_WEIGHT = 0.5;
+
+export function prefixVariants(token: string): [string, number][] {
+  const main = normalizeToken(token);
+  const variants: [string, number][] = [[main, 1]];
+  if (HE_CLITIC_PARTIAL.test(main)) variants.push([main.slice(1), CLITIC_VARIANT_WEIGHT]);
+  return variants;
+}
+
+const FINAL_LETTERS: Record<string, string> = { ך: "כ", ם: "מ", ן: "נ", ף: "פ", ץ: "צ" };
+
+// Tokens as the standard tokenizer would cut them (letters/digits runs).
+function tokenize(query: string): string[] {
+  return query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+export function normalizeToken(token: string): string {
+  return token.toLowerCase().replace(/[ךםןףץ]/g, (c) => FINAL_LETTERS[c]);
+}
+
+// Trailing partial tokens shorter than this are kept out of the morph clause:
+// a 2-letter query token meets the multiplexer's over-stripped stems (`שמ` ←
+// בשמים: ב- prefix and -ים suffix both stripped) and those rare stems carry
+// high IDF, so `שמ` would rank perfumes above oils. Exact + prefix still
+// apply to it. Measured on the harness (surface.test.ts B3).
+export const MORPH_MIN_LAST_TOKEN = 3;
+
 // Three named clauses in one round trip. `matched_queries` on each hit tells
 // 3.3's fusion gating which clause matched:
 //   "exact_high" — a high-signal bare field (title/tags/vendor/sku/...).
@@ -63,38 +124,92 @@ const MORPH_FIELDS = HIGH_SIGNAL_MORPH_FIELDS.map(([f, w]) =>
 // marketing copy) outscore a morph title match — measured as a stemming-tier
 // collapse to 0.65. Max keeps each doc on its best clause, extending the
 // benchmark's best_fields philosophy across the exact/morph pair.
-export function lexicalQuery(query: string): object {
+//
+// `typeahead: true` wraps that dis_max in a bool with one additive
+// should-clause, "prefix" (PREFIX_FIELDS above), on the trailing token. It is
+// a STRICT prefix — `must: prefix`, `must_not: term` on the same field — so
+// it only carries evidence the core cannot: a doc whose field holds the
+// literal complete token is already scored by exact_high/exact_low and gets
+// nothing extra, while a doc holding a longer word (שמנים for a typed שמנ,
+// גוף for a typed ג) does. Measured on the harness (surface.test.ts B3):
+//   - a plain additive prefix double-counted a fully typed last token —
+//     conditioners tagged `שמנים` fired exact_high + prefix and outranked
+//     morph-matched `שמן` oils on `שמנים`; literal-`לגוף` balms outranked
+//     `שמן גוף` oils on `שמן לגוף`;
+//   - a dis_max sibling (max) lost cross-token evidence — a `ג'ל…` title tied
+//     an oil matching both `שמני` (morph) and `ג` (prefix) on `שמני ג`; with a
+//     tie_breaker the same-token stacking came back.
+// A prefix hit on a title/tag/type/vendor is treated as a high-signal exact
+// match for the gate and diagnostics: `שמנ` has zero literal matches, and
+// without that the v1 gate would drop the only leg that can answer a
+// half-typed word. The morph clause drops a trailing token shorter than
+// MORPH_MIN_LAST_TOKEN.
+export type LexicalMode = { typeahead?: boolean };
+
+export function lexicalQuery(query: string, { typeahead = false }: LexicalMode = {}): object {
+  const tokens = tokenize(query);
+  const last = tokens[tokens.length - 1] ?? "";
+  const morphQuery =
+    typeahead && last.length < MORPH_MIN_LAST_TOKEN
+      ? tokens.slice(0, -1).join(" ")
+      : query;
+  const queries: object[] = [
+    {
+      multi_match: {
+        query,
+        fields: EXACT_HIGH_FIELDS,
+        type: "best_fields",
+        operator: "or",
+        _name: "exact_high",
+      },
+    },
+    {
+      multi_match: {
+        query,
+        fields: EXACT_LOW_FIELDS,
+        type: "best_fields",
+        operator: "or",
+        _name: "exact_low",
+      },
+    },
+  ];
+  if (morphQuery) {
+    queries.push({
+      multi_match: {
+        query: morphQuery,
+        fields: MORPH_FIELDS,
+        type: "best_fields",
+        operator: "or",
+        _name: "morph",
+      },
+    });
+  }
+  const core = { dis_max: { queries } };
+  if (!typeahead || !last) return core;
+  const variants = prefixVariants(last);
+  const fields =
+    variants[0][0].length >= PREFIX_BODY_MIN_CHARS ? [...PREFIX_FIELDS, PREFIX_BODY_FIELD] : PREFIX_FIELDS;
+  const strictPrefix = (field: string, value: string, boost: number) => ({
+    bool: {
+      must: { prefix: { [field]: { value, rewrite: PREFIX_REWRITE } } },
+      must_not: { term: { [field]: value } },
+      boost,
+    },
+  });
   return {
-    dis_max: {
-      queries: [
+    bool: {
+      should: [
+        core,
         {
-          multi_match: {
-            query,
-            fields: EXACT_HIGH_FIELDS,
-            type: "best_fields",
-            operator: "or",
-            _name: "exact_high",
-          },
-        },
-        {
-          multi_match: {
-            query,
-            fields: EXACT_LOW_FIELDS,
-            type: "best_fields",
-            operator: "or",
-            _name: "exact_low",
-          },
-        },
-        {
-          multi_match: {
-            query,
-            fields: MORPH_FIELDS,
-            type: "best_fields",
-            operator: "or",
-            _name: "morph",
+          dis_max: {
+            queries: fields.flatMap(([field, boost]) =>
+              variants.map(([value, w]) => strictPrefix(field, value, boost * w)),
+            ),
+            _name: "prefix",
           },
         },
       ],
+      minimum_should_match: 1,
     },
   };
 }
@@ -118,6 +233,11 @@ export type LexicalResult = {
   hits: LexicalHit[]; // ranked; array position is the leg rank for RRF
   exactMatchCount: number;
   highSignalMatchCount: number; // hits matching title/tags/product_type/...
+  total: number; // matching docs (track_total_hits cap applies), any clause
+};
+
+export type LexicalOptions = LexicalMode & {
+  from?: number; // offset — the results page's lexical tail beyond fusion depth
 };
 
 export const SOURCE_FIELDS = [
@@ -136,23 +256,32 @@ export async function lexicalSearch(
   alias: string,
   query: string,
   size = 10,
+  { from = 0, typeahead = false }: LexicalOptions = {},
 ): Promise<LexicalResult> {
   const res = await opensearch.search({
     index: alias,
-    body: { size, _source: SOURCE_FIELDS, query: lexicalQuery(query) } as never,
+    body: {
+      from,
+      size,
+      _source: SOURCE_FIELDS,
+      query: lexicalQuery(query, { typeahead }),
+    } as never,
   });
   const hits: LexicalHit[] = (res.body.hits.hits as any[]).map((h) => {
-    const matched = h.matched_queries ?? [];
+    const matched: string[] = h.matched_queries ?? [];
+    const high = matched.includes("exact_high") || matched.includes("prefix");
     return {
       ...h._source,
       score: h._score,
-      exact: matched.includes("exact_high") || matched.includes("exact_low"),
-      highSignal: matched.includes("exact_high"),
+      exact: high || matched.includes("exact_low"),
+      highSignal: high,
     };
   });
+  const total = res.body.hits.total;
   return {
     hits,
     exactMatchCount: hits.filter((h) => h.exact).length,
     highSignalMatchCount: hits.filter((h) => h.highSignal).length,
+    total: typeof total === "number" ? total : (total?.value ?? hits.length),
   };
 }
