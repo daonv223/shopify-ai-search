@@ -8,9 +8,11 @@
 {%- endcomment -%}
 {%- assign hide = block.settings.hide_native_selector | strip -%}
 {%- if hide == blank -%}
-  {%- assign hide = '.shopify-section:has(> .template-search), .shopify-section:has(.template-search__results), .shopify-section:has(#main-search), .shopify-section:has(.search-results), .shopify-section:has(#MainContent .search)' -%}
+  {%- assign hide = '.shopify-section:has(> .template-search), .shopify-section:has(.template-search__results), .shopify-section:has(#main-search), .shopify-section:has(.search-results), .shopify-section:has(#MainContent .search), .shopify-section:has(.search-page-input), .shopify-section:has(results-list)' -%}
 {%- endif -%}
 <style id="ai-search-hide-native">{{ hide }} { display: none !important; }</style>
+{%- comment -%} Stretch our block to fill its container (themes like Horizon place app blocks inside a flex layout panel where the item would otherwise collapse to content width). {%- endcomment -%}
+<style id="ai-search-block-layout">.shopify-block:has(> [data-ai-search-results]) { flex: 1 1 100%; width: 100%; max-width: 100%; }</style>
 <div
   data-ai-search-results
   data-endpoint="/apps/search/results"

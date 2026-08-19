@@ -7,6 +7,7 @@
 
 :host {
   all: initial;
+  display: block;
   font-family: var(--ai-search-font, var(--font-body-family, inherit));
   color: var(--ai-search-color, var(--color-foreground, inherit));
   box-sizing: border-box;

@@ -10,7 +10,7 @@ name = "ai-search"
 scopes = "read_products"
 
 [app_proxy]
-url = "https://example.invalid/proxy"
+url = "https://example.invalid/proxy/search"
 prefix = "apps"
 subpath = "search"
 
