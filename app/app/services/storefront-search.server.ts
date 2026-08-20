@@ -16,6 +16,7 @@ import {
   type HybridHit,
   type HybridResult,
 } from "./hybrid-search.server";
+import { embeddingProviderFor } from "./embedding.server";
 import { queryEmbeddings, type SemanticStatus } from "./query-embedding.server";
 import { getQueryConfig } from "./search-config.server";
 import { lexicalSearch, type BoostConfig, type LexicalResult, type SynonymGroup } from "./search.server";
@@ -166,7 +167,7 @@ export async function suggest(
   // max(SUGGEST_EMBED_TIMEOUT_MS, lexical), not the sum.
   const lexical = swallow(lexicalSearch(alias, query, SUGGEST_DEPTH, { typeahead: true, ...lexOpts }));
   const embed = shouldEmbedTypeahead(query)
-    ? await queryEmbeddings.get(query, SUGGEST_EMBED_TIMEOUT_MS)
+    ? await queryEmbeddings.get(query, SUGGEST_EMBED_TIMEOUT_MS, embeddingProviderFor(cfg.embedding))
     : { vector: null, status: "skipped" as const };
   const res = await hybridSearchWithVector(alias, query, embed.vector, limit, {
     depth: SUGGEST_DEPTH,
@@ -208,7 +209,11 @@ export async function results(
   const cfg = await getQueryConfig(shop);
   const lexOpts = { boosts: cfg.boosts, synonyms: cfg.synonyms };
   const lexical = swallow(lexicalSearch(alias, query, LEG_DEPTH, lexOpts));
-  const embed = await queryEmbeddings.get(query, RESULTS_EMBED_TIMEOUT_MS);
+  const embed = await queryEmbeddings.get(
+    query,
+    RESULTS_EMBED_TIMEOUT_MS,
+    embeddingProviderFor(cfg.embedding),
+  );
   // The whole fused list (≤ 2 × depth) — page N is a slice of it.
   const res = await hybridSearchWithVector(alias, query, embed.vector, 2 * LEG_DEPTH, {
     lexical,

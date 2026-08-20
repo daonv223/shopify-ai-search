@@ -16,6 +16,7 @@ const SHOP = "embed-test.myshopify.com";
 const ALIAS = "embed-test-products";
 
 class FakeProvider implements EmbeddingProvider {
+  readonly modelId = "fake";
   calls: { texts: string[]; taskType: EmbedTaskType }[] = [];
 
   async embed(texts: string[], taskType: EmbedTaskType): Promise<number[][]> {

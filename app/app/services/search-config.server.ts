@@ -42,8 +42,20 @@ export type SearchConfig = {
   boosts: BoostConfig;
 };
 
+// The embedding provider fields, server-only. Carried on QueryConfig so the
+// storefront resolves the shop's provider from the same row it already reads.
+export type EmbeddingSettings = {
+  embeddingProvider: string;
+  embeddingModel: string;
+  embeddingApiKey: string | null;
+};
+
 // Only what the query path needs, in one read.
-export type QueryConfig = { synonyms: SynonymGroup[]; boosts: BoostConfig };
+export type QueryConfig = {
+  synonyms: SynonymGroup[];
+  boosts: BoostConfig;
+  embedding: EmbeddingSettings;
+};
 
 type SearchConfigRow = {
   embeddingProvider: string;
@@ -115,11 +127,22 @@ export async function getSearchConfig(shop: string): Promise<SearchConfig> {
 export async function getQueryConfig(shop: string): Promise<QueryConfig> {
   const row = await db.searchConfig.findUnique({
     where: { shop },
-    select: { synonyms: true, boosts: true },
+    select: {
+      synonyms: true,
+      boosts: true,
+      embeddingProvider: true,
+      embeddingModel: true,
+      embeddingApiKey: true,
+    },
   });
   return {
     synonyms: normalizeSynonyms(row?.synonyms),
     boosts: normalizeBoosts(row?.boosts),
+    embedding: {
+      embeddingProvider: row?.embeddingProvider ?? "gemini",
+      embeddingModel: row?.embeddingModel ?? DEFAULT_EMBEDDING_MODEL,
+      embeddingApiKey: row?.embeddingApiKey ?? null,
+    },
   };
 }
 

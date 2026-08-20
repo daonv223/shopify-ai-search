@@ -8,6 +8,11 @@ import { searchConfigRow } from "./search-config.server";
 export type EmbedTaskType = "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
 
 export interface EmbeddingProvider {
+  // Identity of the vector space this provider embeds into. Same id → same
+  // text yields the same vector, so the query cache can share one entry
+  // across shops; a different model must not read another model's entries.
+  readonly modelId: string;
+
   // Contract: returned vectors are unit-normalized, so the index's
   // faiss `innerproduct` space is exactly cosine (benchmark parity —
   // 03_index_opensearch.py normalized every vector before indexing; the
@@ -34,12 +39,14 @@ function unitNormalize(vec: number[]): number[] {
 export class GeminiEmbeddingProvider implements EmbeddingProvider {
   private model: string;
   private endpoint: string;
+  readonly modelId: string;
 
   constructor(
     private apiKey: string,
     model: string = DEFAULT_GEMINI_MODEL,
   ) {
     this.model = geminiModelPath(model);
+    this.modelId = this.model;
     this.endpoint = `https://generativelanguage.googleapis.com/v1beta/${this.model}:batchEmbedContents`;
   }
 
@@ -97,24 +104,39 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// null when GEMINI_API_KEY is unset — dev setups without the key keep working
-// (the backfill sweep logs and skips; query embedding throws).
+// The developer's own key, from the environment. This is NOT a fallback for
+// merchants: no shop request resolves through here, because embedding costs
+// are billed to whoever owns the key. Benchmark/latency harnesses only.
 export function defaultEmbeddingProvider(): EmbeddingProvider | null {
   const key = process.env.GEMINI_API_KEY;
   return key ? new GeminiEmbeddingProvider(key) : null;
 }
 
-// Per-shop provider (task 5.1). Uses the shop's stored key/model when set,
-// else falls back to the process default (GEMINI_API_KEY). The doc-embedding
-// backfill resolves through here so a merchant can bring their own key. The
-// query cache stays on the process default — vectors are shop-independent
-// (same model → same vector), so per-shop keys there add no value in v1.
+// Provider for an embedding config already read from the DB. The query path
+// reads SearchConfig once per request anyway, so it resolves through here and
+// pays no second round trip.
+//
+// null when the shop stored no key — bring-your-own-key is strict. There is
+// deliberately no environment fallback: every Gemini call a shop causes must
+// bill that shop's key, never ours. No key → the semantic leg reports "off"
+// and search stays lexical-only, which is a working search, just not hybrid.
+export function embeddingProviderFor(cfg: {
+  embeddingModel: string;
+  embeddingApiKey: string | null;
+}): EmbeddingProvider | null {
+  if (!cfg.embeddingApiKey) return null;
+  return new GeminiEmbeddingProvider(cfg.embeddingApiKey, cfg.embeddingModel || DEFAULT_GEMINI_MODEL);
+}
+
+// Per-shop provider (task 5.1). Both the doc-embedding backfill and the query
+// path resolve through here, so the key a merchant saves in admin Settings is
+// the only key their traffic ever uses.
 export async function embeddingProviderForShop(shop: string): Promise<EmbeddingProvider | null> {
   const row = await searchConfigRow(shop);
-  if (row?.embeddingApiKey) {
-    return new GeminiEmbeddingProvider(row.embeddingApiKey, row.embeddingModel || DEFAULT_GEMINI_MODEL);
-  }
-  return defaultEmbeddingProvider();
+  return embeddingProviderFor({
+    embeddingModel: row?.embeddingModel ?? DEFAULT_GEMINI_MODEL,
+    embeddingApiKey: row?.embeddingApiKey ?? null,
+  });
 }
 
 // Validate a provider/model/key by embedding one probe vector (spec §3.1:
@@ -139,7 +161,8 @@ export async function validateEmbeddingKey(
   }
 }
 
-// Query-side embedding for task 3.3's kNN leg.
+// Query embedding on the environment key — for the benchmark/latency harnesses
+// only. Shop traffic goes through `embeddingProviderFor` and the query cache.
 export async function embedQuery(text: string): Promise<number[]> {
   const provider = defaultEmbeddingProvider();
   if (!provider) throw new Error("GEMINI_API_KEY not set — cannot embed query");

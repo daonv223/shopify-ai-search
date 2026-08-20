@@ -26,7 +26,6 @@
 // high-signal field?) or a doc-frequency/IDF-style concentration signal
 // (`ברק` matches 29% of the catalog, `מראה` 8%), tuned against the frozen v1
 // benchmark (review finding 3) rather than against either single query.
-import { embedQuery } from "./embedding.server";
 import { opensearch } from "./opensearch.server";
 import {
   SOURCE_FIELDS,
@@ -108,20 +107,11 @@ export type HybridResult = {
   lexicalTotal: number; // lexical leg's total matching docs (results-page tail)
 };
 
-export async function hybridSearch(
-  alias: string,
-  query: string,
-  size = 10,
-  opts: HybridOptions = {},
-): Promise<HybridResult> {
-  return hybridSearchWithVector(alias, query, await embedQuery(query), size, opts);
-}
-
-// Split from hybridSearch so the harness can inject cached query vectors and
-// run the full fusion without a Gemini key. `queryVector: null` runs the
-// lexical leg alone through the same shape (the type-ahead's cold-cache and
-// partial-token paths) — no gate applies, since there is nothing to protect
-// from the leg.
+// Callers resolve the query vector themselves — the storefront through the
+// per-shop query cache, harnesses through `embedQuery`. `queryVector: null`
+// runs the lexical leg alone through the same shape (the type-ahead's
+// cold-cache and partial-token paths, and any shop with no embedding key) —
+// no gate applies, since there is nothing to protect from the leg.
 export async function hybridSearchWithVector(
   alias: string,
   query: string,
