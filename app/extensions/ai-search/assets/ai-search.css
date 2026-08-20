@@ -70,6 +70,12 @@ img { display: block; max-width: 100%; }
   font-weight: 600;
   text-align: center;
 }
+.ai-empty {
+  padding: 1.25rem 0.75rem;
+  text-align: center;
+  color: var(--ai-search-color, #111);
+  opacity: 0.75;
+}
 
 /* ---------- results grid (block mode) ---------- */
 .ai-results {

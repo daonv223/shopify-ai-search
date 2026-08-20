@@ -195,6 +195,7 @@
     this.panel = el('div', { class: 'ai-panel', dir: 'rtl', role: 'listbox', id: this.id });
     this.root.appendChild(this.panel);
     document.body.appendChild(this.host);
+    this.mode = 'float'; // 'float' = fixed overlay under the input; 'inline' = in a modal dialog
     this.hits = [];
     this.active = -1;
     this.query = '';
@@ -308,9 +309,23 @@
       })
       .catch(function (err) {
         if (err && err.name === 'AbortError') return;
-        // Fail closed and quiet: no dropdown, native form submit still works.
-        self.close();
+        if (controller !== self.controller) return; // superseded
+        self.controller = null;
+        if (self.input.value.replace(/\s+/g, ' ').trim() !== q) return; // typed on
+        // The theme's native dropdown is hidden by our embed CSS, so a silent
+        // close leaves a blank modal. Show an explicit error state instead.
+        self.renderMessage(t('error'));
       });
+  };
+
+  // A single-message panel (empty or error). The theme's own "No results"
+  // state cannot show — the embed hides it — so we render our own.
+  Dropdown.prototype.renderMessage = function (message) {
+    this.hits = [];
+    this.active = -1;
+    this.panel.textContent = '';
+    this.panel.appendChild(el('div', { class: 'ai-empty', dir: 'auto', text: message }));
+    this.open();
   };
 
   Dropdown.prototype.render = function (body) {
@@ -320,7 +335,7 @@
     this.active = -1;
     this.panel.textContent = '';
     if (!hits.length) {
-      this.close();
+      this.renderMessage(t('noResults'));
       announce(t('statusResults', { count: 0 }));
       return;
     }
@@ -354,7 +369,37 @@
     return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'q=' + encodeURIComponent(q);
   };
 
+  // Themes like Horizon open search inside a native <dialog> shown with
+  // showModal() — that dialog lives in the browser's top layer, which paints
+  // above every z-index. A body-level fixed host is therefore occluded and
+  // never seen. When our input is inside such a modal we mount the host in the
+  // dialog's own flow (top layer, no occlusion) instead of floating it.
+  Dropdown.prototype.mount = function () {
+    var dlg = this.input.closest ? this.input.closest('dialog') : null;
+    var modal = dlg && dlg.open && (!dlg.matches || dlg.matches(':modal'));
+    if (modal) {
+      // A full-width flex column that gains the modal's width when open. Fall
+      // back through generic ancestors for non-Horizon modal markup.
+      var anchor =
+        this.input.closest('.predictive-search-form__content-wrapper') ||
+        this.input.closest('.predictive-search-form__content') ||
+        this.input.closest('form') ||
+        dlg;
+      if (this.mode !== 'inline' || this.host.parentNode !== anchor) {
+        this.mode = 'inline';
+        this.host.style.cssText = 'display:none;position:static;width:100%;';
+        this.panel.style.maxHeight = '60vh';
+        anchor.appendChild(this.host);
+      }
+    } else if (this.mode !== 'float' || this.host.parentNode !== document.body) {
+      this.mode = 'float';
+      this.host.style.cssText = 'position:fixed;z-index:2147483000;display:none;';
+      document.body.appendChild(this.host);
+    }
+  };
+
   Dropdown.prototype.position = function () {
+    if (this.mode !== 'float') return; // inline hosts follow the modal's flow
     var r = this.input.getBoundingClientRect();
     var width = Math.max(r.width, 280);
     var left = r.left;
@@ -368,6 +413,7 @@
   Dropdown.prototype.open = function () {
     if (openDropdown && openDropdown !== this) openDropdown.close();
     openDropdown = this;
+    this.mount();
     this.position();
     this.host.style.display = 'block';
     this.input.setAttribute('aria-expanded', 'true');

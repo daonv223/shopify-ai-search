@@ -16,7 +16,7 @@
     endif
   -%}
   <style id="ai-search-native-predictive">
-    {{ block.settings.predictive_selector | default: 'predictive-search .predictive-search, [data-predictive-search], #predictive-search-results, .predictive-search__results, .predictive-search-dropdown, predictive-search-component #predictive-search-results' }} { display: none !important; }
+    {{ block.settings.predictive_selector | default: 'predictive-search .predictive-search, [data-predictive-search], #predictive-search-results, .predictive-search__results, .predictive-search-dropdown, predictive-search-component #predictive-search-results, .predictive-search-form__content, .predictive-search-form__footer' }} { display: none !important; }
   </style>
   <script>
     window.AISearchConfig = {
