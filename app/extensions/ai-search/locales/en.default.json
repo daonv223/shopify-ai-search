@@ -1,33 +1,4 @@
 {
-  "embed": {
-    "name": "AI Search",
-    "enabled": { "label": "Enable AI Search on the storefront" },
-    "predictive_header": "Type-ahead dropdown",
-    "max_suggestions": { "label": "Maximum suggestions" },
-    "min_chars": { "label": "Minimum characters before searching" },
-    "show_prices": { "label": "Show prices" },
-    "show_images": { "label": "Show product images" },
-    "results_header": "Results page",
-    "results_mode": {
-      "label": "How the results page is served",
-      "info": "\"App block\": add the \"AI Search results\" block to your search template (Online Store 2.0 themes). \"Search page from the app\": the search form is sent to /apps/search, which renders inside your theme (older themes without app blocks).",
-      "block": "App block on the search template",
-      "proxy": "Search page from the app (older themes)"
-    },
-    "advanced_header": "Advanced (leave empty for most themes)",
-    "input_selector": { "label": "Search input selector override", "info": "CSS selector for the theme's search inputs. Default: form[action*=\"/search\"] input[name=\"q\"]" },
-    "form_selector": { "label": "Search form selector override", "info": "CSS selector for the theme's search forms. Default: form[action*=\"/search\"]" },
-    "predictive_selector": { "label": "Native predictive dropdown selector", "info": "Elements to hide so the theme's own suggestions never show. Default covers Dawn and most themes." },
-    "native_results_selector": { "label": "Native results section selector", "info": "Overrides the selector configured on the AI Search results block." }
-  },
-  "results": {
-    "name": "AI Search results",
-    "heading": { "label": "Heading" },
-    "page_size": { "label": "Products per page" },
-    "show_search_form": { "label": "Show a search box above the results" },
-    "show_count": { "label": "Show the result count" },
-    "hide_native_selector": { "label": "Native results section selector", "info": "CSS selector of the theme's own search results section, hidden while this block is on the page. Default covers Dawn." }
-  },
   "ai_search": {
     "show_all": "Show all results for “{{ query }}”",
     "no_results": "No products match your search. Try another word.",
