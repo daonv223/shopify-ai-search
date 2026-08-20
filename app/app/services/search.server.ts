@@ -9,6 +9,26 @@ import { opensearch } from "./opensearch.server";
 
 const BARE_UPLIFT = 1.2;
 
+// ── Per-shop query config (task 5.1) ────────────────────────────────────────
+// Merchant-tunable field weights + synonyms, applied at query time so an edit
+// changes results with no reindex. Pure logic lives here (no DB); the
+// SearchConfig persistence layer (search-config.server.ts) imports these.
+//
+// Only these five fields are merchant levers (spec §3.1). variant_titles /
+// option_values stay fixed internal signals. DEFAULT_BOOSTS are the exact
+// Phase 3 weights below, so an un-configured shop ranks byte-for-byte as before.
+export const BOOSTABLE_FIELDS = ["title", "tags", "product_type", "vendor", "body"] as const;
+export type BoostField = (typeof BOOSTABLE_FIELDS)[number];
+export type BoostConfig = Record<BoostField, number>;
+export const DEFAULT_BOOSTS: BoostConfig = { title: 3, tags: 2, product_type: 2, vendor: 1, body: 1 };
+export const BOOST_MIN = 0;
+export const BOOST_MAX = 10;
+
+// A synonym group. `oneWay` → only terms[0] expands to the rest; else every
+// term expands to every other. Terms are appended to the match text, so the
+// Hebrew analyzer stems them the same as any query token.
+export type SynonymGroup = { terms: string[]; oneWay: boolean };
+
 // High-signal fields: a bare match here means the query is *about* the
 // product — either it names what the product is (title/tags/product_type/
 // variant_titles/option_values/category_name), who makes it (vendor), or
@@ -21,7 +41,10 @@ const BARE_UPLIFT = 1.2;
 // keys off it, sku/barcode/vendor/category_name must stay high-signal: a SKU
 // or brand query has no useful vector neighbourhood, so dropping the lexical
 // leg drops the only leg that can answer it (hybrid.test.ts A5c).
-const HIGH_SIGNAL_MORPH_FIELDS: [string, number][] = [
+// Base morph-field weights (Phase 3). A merchant boost config overrides the
+// tunable subset (title/tags/product_type/vendor); variant_titles/option_values
+// stay fixed internal signals. `body` (low-signal) is tunable too, below.
+const BASE_MORPH_WEIGHTS: [string, number][] = [
   ["title", 3],
   ["tags", 2],
   ["product_type", 2],
@@ -33,18 +56,40 @@ const HIGH_SIGNAL_MORPH_FIELDS: [string, number][] = [
 // conservative low weight (untested in the benchmark corpus), sku/barcode as
 // keyword lookup fields.
 const HIGH_SIGNAL_BARE_ONLY_FIELDS = ["category_name", "sku", "barcode"];
+const PREFIX_TUNABLE = new Set(["title", "tags", "product_type", "vendor"]);
 
-// Low-signal bare fields: body (benchmark weight 1) and metafield_text (§3.1
-// extension). A match proves the token exists somewhere in the doc but is
-// weak evidence the query is about the product — long free-form text.
-const EXACT_HIGH_FIELDS = [
-  ...HIGH_SIGNAL_MORPH_FIELDS.map(([f, w]) => `${f}^${w * BARE_UPLIFT}`),
-  ...HIGH_SIGNAL_BARE_ONLY_FIELDS,
-];
-const EXACT_LOW_FIELDS = [`body^${BARE_UPLIFT}`, "metafield_text"];
-const MORPH_FIELDS = HIGH_SIGNAL_MORPH_FIELDS.map(([f, w]) =>
-  w === 1 ? `${f}.morph` : `${f}.morph^${w}`,
-).concat(["body.morph"]);
+// The field lists sent to OpenSearch, derived from a boost config. Low-signal
+// bare fields: body (weight 1 default) and metafield_text. A body/metafield
+// match proves the token exists somewhere but is weak evidence the query is
+// about the product — long free-form text. `fieldSets(DEFAULT_BOOSTS)` equals
+// the Phase 3 constants exactly, so an un-configured shop is unchanged.
+type FieldSets = {
+  exactHigh: string[];
+  exactLow: string[];
+  morph: string[];
+  prefixFields: [string, number][];
+  prefixBody: [string, number];
+};
+
+function fieldSets(boosts: BoostConfig): FieldSets {
+  const morphWeights: [string, number][] = BASE_MORPH_WEIGHTS.map(([f, w]) =>
+    f in boosts ? [f, boosts[f as BoostField]] : [f, w],
+  );
+  return {
+    exactHigh: [
+      ...morphWeights.map(([f, w]) => `${f}^${w * BARE_UPLIFT}`),
+      ...HIGH_SIGNAL_BARE_ONLY_FIELDS,
+    ],
+    exactLow: [`body^${boosts.body * BARE_UPLIFT}`, "metafield_text"],
+    morph: morphWeights
+      .map(([f, w]) => (w === 1 ? `${f}.morph` : `${f}.morph^${w}`))
+      .concat([boosts.body === 1 ? "body.morph" : `body.morph^${boosts.body}`]),
+    prefixFields: morphWeights
+      .filter(([f]) => PREFIX_TUNABLE.has(f))
+      .map(([f, w]) => [f, w * BARE_UPLIFT] as [string, number]),
+    prefixBody: ["body", boosts.body],
+  };
+}
 
 // Type-ahead prefix clause (Phase 4 spec §2 "partial-token handling"): the
 // trailing token of a query being typed is a prefix, so `שמ` must meet
@@ -62,10 +107,6 @@ const MORPH_FIELDS = HIGH_SIGNAL_MORPH_FIELDS.map(([f, w]) =>
 // `body` at its low weight only once the token has PREFIX_BODY_MIN_CHARS —
 // long prose would let two letters match half the catalog, but a concept
 // that lives only in body copy (`מראה`, A5d) must still type-ahead.
-const PREFIX_FIELDS: [string, number][] = HIGH_SIGNAL_MORPH_FIELDS.filter(([f]) =>
-  ["title", "tags", "product_type", "vendor"].includes(f),
-).map(([f, w]) => [f, w * BARE_UPLIFT]);
-const PREFIX_BODY_FIELD: [string, number] = ["body", 1];
 export const PREFIX_BODY_MIN_CHARS = 3;
 const PREFIX_REWRITE = "top_terms_blended_freqs_100";
 
@@ -98,6 +139,35 @@ function tokenize(query: string): string[] {
 
 export function normalizeToken(token: string): string {
   return token.toLowerCase().replace(/[ךםןףץ]/g, (c) => FINAL_LETTERS[c]);
+}
+
+// Synonym expansion (task 5.1): for each configured group whose a term appears
+// in the query, append the group's other terms to the match text. Applied only
+// on the results/non-typeahead path (a typed trailing token is a prefix, not a
+// synonym trigger). Appended terms feed the exact/morph multi_match — the
+// Hebrew analyzer stems them like any token — so `שמן` also matches `אולי`
+// with no reindex. `oneWay` groups expand only from terms[0]. Bounded: a term
+// already present is not re-added; each extra term is added at most once.
+// Note (open q1): a synonym on an already-stemmed form can double-expand; v1
+// accepts this — flagged in the spec — and the fallback is pre-analysis only.
+const MAX_SYNONYM_EXPANSIONS = 20;
+export function expandSynonyms(query: string, groups: SynonymGroup[]): string {
+  if (!groups.length) return query;
+  const present = new Set(tokenize(query).map(normalizeToken));
+  const extras: string[] = [];
+  const added = new Set(present);
+  for (const { terms, oneWay } of groups) {
+    const norm = terms.map((t) => normalizeToken(t));
+    const triggered = oneWay ? present.has(norm[0]) : norm.some((t) => present.has(t));
+    if (!triggered) continue;
+    const from = oneWay ? 1 : 0;
+    for (let i = from; i < terms.length; i++) {
+      if (added.has(norm[i]) || extras.length >= MAX_SYNONYM_EXPANSIONS) continue;
+      added.add(norm[i]);
+      extras.push(terms[i]);
+    }
+  }
+  return extras.length ? `${query} ${extras.join(" ")}` : query;
 }
 
 // Trailing partial tokens shorter than this are kept out of the morph clause:
@@ -144,20 +214,30 @@ export const MORPH_MIN_LAST_TOKEN = 3;
 // without that the v1 gate would drop the only leg that can answer a
 // half-typed word. The morph clause drops a trailing token shorter than
 // MORPH_MIN_LAST_TOKEN.
-export type LexicalMode = { typeahead?: boolean };
+// Per-shop query config (task 5.1): merchant boosts + synonyms. Optional
+// everywhere — omitted → Phase 3 defaults, so callers that don't load config
+// are unchanged.
+export type LexicalMode = { typeahead?: boolean; boosts?: BoostConfig; synonyms?: SynonymGroup[] };
 
-export function lexicalQuery(query: string, { typeahead = false }: LexicalMode = {}): object {
+export function lexicalQuery(
+  query: string,
+  { typeahead = false, boosts = DEFAULT_BOOSTS, synonyms = [] }: LexicalMode = {},
+): object {
+  const sets = fieldSets(boosts);
   const tokens = tokenize(query);
   const last = tokens[tokens.length - 1] ?? "";
+  // Synonyms expand the match text on the results path only; the trailing
+  // token of a type-ahead query is a prefix being typed, not a synonym trigger.
+  const matchText = typeahead ? query : expandSynonyms(query, synonyms);
   const morphQuery =
     typeahead && last.length < MORPH_MIN_LAST_TOKEN
       ? tokens.slice(0, -1).join(" ")
-      : query;
+      : matchText;
   const queries: object[] = [
     {
       multi_match: {
-        query,
-        fields: EXACT_HIGH_FIELDS,
+        query: matchText,
+        fields: sets.exactHigh,
         type: "best_fields",
         operator: "or",
         _name: "exact_high",
@@ -165,8 +245,8 @@ export function lexicalQuery(query: string, { typeahead = false }: LexicalMode =
     },
     {
       multi_match: {
-        query,
-        fields: EXACT_LOW_FIELDS,
+        query: matchText,
+        fields: sets.exactLow,
         type: "best_fields",
         operator: "or",
         _name: "exact_low",
@@ -177,7 +257,7 @@ export function lexicalQuery(query: string, { typeahead = false }: LexicalMode =
     queries.push({
       multi_match: {
         query: morphQuery,
-        fields: MORPH_FIELDS,
+        fields: sets.morph,
         type: "best_fields",
         operator: "or",
         _name: "morph",
@@ -188,7 +268,9 @@ export function lexicalQuery(query: string, { typeahead = false }: LexicalMode =
   if (!typeahead || !last) return core;
   const variants = prefixVariants(last);
   const fields =
-    variants[0][0].length >= PREFIX_BODY_MIN_CHARS ? [...PREFIX_FIELDS, PREFIX_BODY_FIELD] : PREFIX_FIELDS;
+    variants[0][0].length >= PREFIX_BODY_MIN_CHARS
+      ? [...sets.prefixFields, sets.prefixBody]
+      : sets.prefixFields;
   const strictPrefix = (field: string, value: string, boost: number) => ({
     bool: {
       must: { prefix: { [field]: { value, rewrite: PREFIX_REWRITE } } },
@@ -256,7 +338,7 @@ export async function lexicalSearch(
   alias: string,
   query: string,
   size = 10,
-  { from = 0, typeahead = false }: LexicalOptions = {},
+  { from = 0, typeahead = false, boosts, synonyms }: LexicalOptions = {},
 ): Promise<LexicalResult> {
   const res = await opensearch.search({
     index: alias,
@@ -264,7 +346,7 @@ export async function lexicalSearch(
       from,
       size,
       _source: SOURCE_FIELDS,
-      query: lexicalQuery(query, { typeahead }),
+      query: lexicalQuery(query, { typeahead, boosts, synonyms }),
     } as never,
   });
   const hits: LexicalHit[] = (res.body.hits.hits as any[]).map((h) => {

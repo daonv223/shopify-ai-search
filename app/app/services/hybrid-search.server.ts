@@ -127,10 +127,10 @@ export async function hybridSearchWithVector(
   query: string,
   queryVector: number[] | null,
   size = 10,
-  { depth = LEG_DEPTH, typeahead = false, lexical }: HybridOptions = {},
+  { depth = LEG_DEPTH, typeahead = false, boosts, synonyms, lexical }: HybridOptions = {},
 ): Promise<HybridResult> {
   const [lex, knn] = await Promise.all([
-    lexical ?? lexicalSearch(alias, query, depth, { typeahead }),
+    lexical ?? lexicalSearch(alias, query, depth, { typeahead, boosts, synonyms }),
     queryVector ? knnSearch(alias, queryVector, depth) : Promise.resolve([]),
   ]);
   const gated = queryVector !== null && lex.exactMatchCount === 0;

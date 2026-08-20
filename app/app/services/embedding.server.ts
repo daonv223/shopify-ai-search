@@ -1,4 +1,5 @@
 import { EMBED_DIM } from "./opensearch.server";
+import { searchConfigRow } from "./search-config.server";
 
 // Embedding provider interface (spec §2.4 / §3.2). Gemini is the v1 default;
 // nothing outside this module knows the provider — everything else depends on
@@ -16,10 +17,14 @@ export interface EmbeddingProvider {
 
 // Port of the benchmark's EmbeddingClient (benchmark/part2_retrieval/common.py):
 // same model, batch endpoint, batch size, and retry policy.
-const MODEL = "models/gemini-embedding-001";
-const EMBED_API = `https://generativelanguage.googleapis.com/v1beta/${MODEL}:batchEmbedContents`;
+export const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 const EMBED_BATCH = 50;
 const ATTEMPTS = 5;
+
+// The Gemini API names the model `models/<id>`; the admin stores the bare id.
+function geminiModelPath(model: string): string {
+  return model.startsWith("models/") ? model : `models/${model}`;
+}
 
 function unitNormalize(vec: number[]): number[] {
   const norm = Math.sqrt(vec.reduce((s, x) => s + x * x, 0)) || 1;
@@ -27,7 +32,16 @@ function unitNormalize(vec: number[]): number[] {
 }
 
 export class GeminiEmbeddingProvider implements EmbeddingProvider {
-  constructor(private apiKey: string) {}
+  private model: string;
+  private endpoint: string;
+
+  constructor(
+    private apiKey: string,
+    model: string = DEFAULT_GEMINI_MODEL,
+  ) {
+    this.model = geminiModelPath(model);
+    this.endpoint = `https://generativelanguage.googleapis.com/v1beta/${this.model}:batchEmbedContents`;
+  }
 
   async embed(texts: string[], taskType: EmbedTaskType): Promise<number[][]> {
     const vectors: number[][] = [];
@@ -35,7 +49,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
       const chunk = texts.slice(i, i + EMBED_BATCH);
       const body = await this.post({
         requests: chunk.map((text) => ({
-          model: MODEL,
+          model: this.model,
           content: { parts: [{ text }] },
           taskType,
         })),
@@ -60,7 +74,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     for (let attempt = 1; ; attempt++) {
       let res: Response;
       try {
-        res = await fetch(EMBED_API, {
+        res = await fetch(this.endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
           body: JSON.stringify(body),
@@ -88,6 +102,41 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export function defaultEmbeddingProvider(): EmbeddingProvider | null {
   const key = process.env.GEMINI_API_KEY;
   return key ? new GeminiEmbeddingProvider(key) : null;
+}
+
+// Per-shop provider (task 5.1). Uses the shop's stored key/model when set,
+// else falls back to the process default (GEMINI_API_KEY). The doc-embedding
+// backfill resolves through here so a merchant can bring their own key. The
+// query cache stays on the process default — vectors are shop-independent
+// (same model → same vector), so per-shop keys there add no value in v1.
+export async function embeddingProviderForShop(shop: string): Promise<EmbeddingProvider | null> {
+  const row = await searchConfigRow(shop);
+  if (row?.embeddingApiKey) {
+    return new GeminiEmbeddingProvider(row.embeddingApiKey, row.embeddingModel || DEFAULT_GEMINI_MODEL);
+  }
+  return defaultEmbeddingProvider();
+}
+
+// Validate a provider/model/key by embedding one probe vector (spec §3.1:
+// "validate the key with a one-vector test call before saving"). Returns a
+// flat ok/error the admin action can surface without leaking the key.
+export async function validateEmbeddingKey(
+  provider: string,
+  model: string,
+  apiKey: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (provider !== "gemini") {
+    return { ok: false, error: `provider ${provider} is not supported yet` };
+  }
+  try {
+    const [vector] = await new GeminiEmbeddingProvider(apiKey, model).embed(["בדיקה"], "RETRIEVAL_QUERY");
+    if (!vector || vector.length !== EMBED_DIM) {
+      return { ok: false, error: `unexpected embedding dimension ${vector?.length ?? 0}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // Query-side embedding for task 3.3's kNN leg.

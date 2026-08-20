@@ -1,7 +1,7 @@
 import db from "../db.server";
 import { opensearch } from "./opensearch.server";
 import { composeEmbeddingInput } from "./product-doc.server";
-import { defaultEmbeddingProvider, type EmbeddingProvider } from "./embedding.server";
+import { embeddingProviderForShop, type EmbeddingProvider } from "./embedding.server";
 
 // Embedding backfill worker (task 3.2): embed every product whose
 // ProductSyncState says embedding_stale, write the vector into the index,
@@ -109,15 +109,16 @@ export function scheduleEmbeddingBackfill(shop: string, indexAlias: string): voi
     shop,
     setTimeout(() => {
       pending.delete(shop);
-      const provider = defaultEmbeddingProvider();
-      if (!provider) {
-        console.log(`[embedding] ${shop}: GEMINI_API_KEY not set, skipping backfill`);
-        return;
-      }
-      backfillEmbeddings(shop, indexAlias, provider)
-        .then(({ embedded, missing }) =>
-          console.log(`[embedding] ${shop}: embedded ${embedded}, missing ${missing}`),
-        )
+      void embeddingProviderForShop(shop)
+        .then((provider) => {
+          if (!provider) {
+            console.log(`[embedding] ${shop}: no embedding key set, skipping backfill`);
+            return;
+          }
+          return backfillEmbeddings(shop, indexAlias, provider).then(({ embedded, missing }) =>
+            console.log(`[embedding] ${shop}: embedded ${embedded}, missing ${missing}`),
+          );
+        })
         .catch((err) => console.error(`[embedding] ${shop} backfill failed:`, err));
     }, DEBOUNCE_MS),
   );

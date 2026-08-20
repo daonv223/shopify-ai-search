@@ -62,6 +62,20 @@ model SyncRun {
   @@index([bulkOperationId])
 }
 
+// Per-shop search + provider config (task 5.1). One row per shop.
+// Synonyms and boosts apply at QUERY time (search.server.ts) so a merchant
+// edit changes results with no reindex/redeploy. The embedding key/model drive
+// the ingest sweep; the key is never returned to the browser.
+model SearchConfig {
+  shop              String   @id // shop domain, e.g. my-store.myshopify.com
+  embeddingProvider String   @default("gemini") // gemini (openai deferred to a later phase)
+  embeddingModel    String   @default("gemini-embedding-001")
+  embeddingApiKey   String? // per-shop key; null → fall back to GEMINI_API_KEY env
+  synonyms          Json? // SynonymGroup[]: [{ terms: string[], oneWay: boolean }]
+  boosts            Json? // BoostConfig: per-field weight overrides over the Phase 3 defaults
+  updatedAt         DateTime @updatedAt
+}
+
 model WebhookEvent {
   id          String    @id @default(cuid())
   shop        String

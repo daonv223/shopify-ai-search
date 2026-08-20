@@ -17,7 +17,8 @@ import {
   type HybridResult,
 } from "./hybrid-search.server";
 import { queryEmbeddings, type SemanticStatus } from "./query-embedding.server";
-import { lexicalSearch, type LexicalResult } from "./search.server";
+import { getQueryConfig } from "./search-config.server";
+import { lexicalSearch, type BoostConfig, type LexicalResult, type SynonymGroup } from "./search.server";
 
 export const QUERY_MAX_LEN = 200;
 
@@ -157,9 +158,13 @@ export async function suggest(
   const limit = clampInt(rawLimit, { min: 1, max: SUGGEST_LIMIT_MAX, fallback: SUGGEST_LIMIT_DEFAULT });
   if (!query) return empty(query);
 
+  // Per-shop boosts/synonyms (task 5.1). Synonyms are a no-op on the type-ahead
+  // path (a trailing token is a prefix, not a synonym trigger); boosts apply.
+  const cfg = await getQueryConfig(shop);
+  const lexOpts = { boosts: cfg.boosts, synonyms: cfg.synonyms };
   // Lexical leg first, embedding wait alongside it: a cold keystroke costs
   // max(SUGGEST_EMBED_TIMEOUT_MS, lexical), not the sum.
-  const lexical = swallow(lexicalSearch(alias, query, SUGGEST_DEPTH, { typeahead: true }));
+  const lexical = swallow(lexicalSearch(alias, query, SUGGEST_DEPTH, { typeahead: true, ...lexOpts }));
   const embed = shouldEmbedTypeahead(query)
     ? await queryEmbeddings.get(query, SUGGEST_EMBED_TIMEOUT_MS)
     : { vector: null, status: "skipped" as const };
@@ -167,6 +172,7 @@ export async function suggest(
     depth: SUGGEST_DEPTH,
     typeahead: true,
     lexical,
+    ...lexOpts,
   });
   const out: SuggestResponse = {
     query,
@@ -199,12 +205,17 @@ export async function results(
   const limit = clampInt(rawLimit, { min: 1, max: RESULTS_LIMIT_MAX, fallback: RESULTS_LIMIT_DEFAULT });
   if (!query) return { ...empty(query), page, limit, has_more: false };
 
-  const lexical = swallow(lexicalSearch(alias, query, LEG_DEPTH));
+  const cfg = await getQueryConfig(shop);
+  const lexOpts = { boosts: cfg.boosts, synonyms: cfg.synonyms };
+  const lexical = swallow(lexicalSearch(alias, query, LEG_DEPTH, lexOpts));
   const embed = await queryEmbeddings.get(query, RESULTS_EMBED_TIMEOUT_MS);
   // The whole fused list (≤ 2 × depth) — page N is a slice of it.
-  const res = await hybridSearchWithVector(alias, query, embed.vector, 2 * LEG_DEPTH, { lexical });
+  const res = await hybridSearchWithVector(alias, query, embed.vector, 2 * LEG_DEPTH, {
+    lexical,
+    ...lexOpts,
+  });
   const offset = (page - 1) * limit;
-  const list = await withLexicalTail(alias, query, res, offset + limit + 1);
+  const list = await withLexicalTail(alias, query, res, offset + limit + 1, lexOpts);
 
   const out: ResultsResponse = {
     query,
@@ -246,11 +257,12 @@ async function withLexicalTail(
   query: string,
   res: HybridResult,
   wanted: number,
+  lexOpts: { boosts?: BoostConfig; synonyms?: SynonymGroup[] } = {},
 ): Promise<HybridHit[]> {
   if (!res.anchored) return [];
   if (res.gated || res.hits.length >= wanted || res.lexicalTotal <= LEG_DEPTH) return res.hits;
   const need = Math.min(wanted - res.hits.length + LEG_DEPTH, RESULTS_TAIL_MAX);
-  const tail = await lexicalSearch(alias, query, need, { from: LEG_DEPTH });
+  const tail = await lexicalSearch(alias, query, need, { from: LEG_DEPTH, ...lexOpts });
   const seen = new Set(res.hits.map((h) => h.handle));
   const extra: HybridHit[] = [];
   for (const hit of tail.hits) {
