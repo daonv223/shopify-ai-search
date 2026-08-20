@@ -68,6 +68,7 @@ model WebhookEvent {
   topic       String
   payload     Json
   status      String    @default("pending") // pending | processed | failed
+  error       Json? // failure detail when status=failed (task 5.3) — { message, ... }
   receivedAt  DateTime  @default(now())
   processedAt DateTime?
 

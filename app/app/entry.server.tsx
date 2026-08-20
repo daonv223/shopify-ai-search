@@ -5,8 +5,13 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { startCronJobs } from "./services/cron.server";
 
 export const streamTimeout = 5000;
+
+// Boot the in-process cron jobs (webhook drain + daily reconcile) once, when
+// the server module first loads (task 5.3). No-op under the test runner.
+startCronJobs();
 
 export default async function handleRequest(
   request: Request,

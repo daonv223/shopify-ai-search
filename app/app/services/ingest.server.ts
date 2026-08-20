@@ -110,6 +110,12 @@ export async function parseBulkJsonl(stream: NodeJS.ReadableStream): Promise<Pro
 
     if (gid.includes("/Product/")) {
       const p = row as BulkProductRow;
+      // Publication visibility (task 5.3): the `status:active` bulk query
+      // cannot filter onlineStoreUrl, so gate here — Shopify returns it null
+      // unless the product is published to the Online Store channel, which
+      // excludes active-but-unpublished and POS-only products at the source.
+      // Its variant/metafield child lines then find no parent and no-op.
+      if (!p.onlineStoreUrl) continue;
       const image = p.featuredMedia?.preview?.image;
       products.set(gid, {
         id: gidToId(gid),
@@ -152,8 +158,8 @@ export async function parseBulkJsonl(stream: NodeJS.ReadableStream): Promise<Pro
   return [...products.values()];
 }
 
-// bulk_operations/finish webhook processor. Called fire-and-forget after the
-// webhook is acked; full retry/reconciliation hardening is task 5.3.
+// bulk_operations/finish webhook processor. Called by the cron drain worker off
+// a persisted WebhookEvent (task 5.3), which re-resolves the admin client.
 export async function processBulkOperationFinish(
   shop: string,
   payload: { admin_graphql_api_id: string },

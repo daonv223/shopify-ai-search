@@ -109,10 +109,11 @@ function toProductInput(p: GqlProduct): ProductInput {
   };
 }
 
-// products/create | products/update | products/delete processor. Called
-// fire-and-forget after the webhook is acked; retry/reconciliation hardening
-// is task 5.3. Changed-text detection lives in indexProducts (content hash →
-// embedding_stale). Returns a short outcome string for logging.
+// products/create | products/update | products/delete processor. Called by the
+// cron drain worker off a persisted WebhookEvent (task 5.3) — idempotent, so a
+// re-picked-up event is safe. Also the reconciliation sweep's index path for a
+// missing product. Changed-text detection lives in indexProducts (content hash
+// → embedding_stale). Returns a short outcome string for logging.
 export async function processProductWebhook(
   shop: string,
   topic: string,
@@ -135,12 +136,18 @@ export async function processProductWebhook(
   });
   const product = (await res.json()).data?.product as GqlProduct | null;
 
-  // Deleted between webhook and re-fetch, or no longer ACTIVE — only ACTIVE
-  // products are indexed (spec §3.2), so drop it either way. removeProduct
-  // is a no-op if it was never indexed.
-  if (!product || product.status !== "ACTIVE") {
+  // Deleted between webhook and re-fetch, no longer ACTIVE, or unpublished from
+  // the Online Store — only active AND published products are indexed
+  // (publication visibility, task 5.3: onlineStoreUrl is null unless published
+  // to the Online Store channel). Drop it in every case; removeProduct is a
+  // no-op if it was never indexed, so unpublishing removes it the same way a
+  // status change does.
+  if (!product || product.status !== "ACTIVE" || !product.onlineStoreUrl) {
     await removeProduct(shop, shopRow.indexAlias, productId);
-    return product ? `removed (status ${product.status})` : "removed (gone)";
+    if (!product) return "removed (gone)";
+    return product.status !== "ACTIVE"
+      ? `removed (status ${product.status})`
+      : "removed (unpublished)";
   }
 
   const result = await indexProducts(shop, shopRow.indexAlias, [toProductInput(product)]);
