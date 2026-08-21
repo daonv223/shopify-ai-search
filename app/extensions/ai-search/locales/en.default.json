@@ -9,14 +9,14 @@
     "sold_out": "Sold out",
     "results_for": "Search results for “{{ query }}”",
     "results_count": "{{ count }} products",
-    "status_results": "{{ count }} search results found for \"{{ query }}\"",
+    "status_results": "{{ count }} search results found for “{{ query }}”",
     "search_placeholder": "Search",
     "search_button": "Search",
     "view_all": "View all",
     "products_heading": "Products",
     "clear": "Clear",
     "close": "Close dialog",
-    "no_results_for": "No results found for \"{{ query }}\". Try another search.",
-    "status_no_results": "No results found for \"{{ query }}\""
+    "no_results_for": "No results found for “{{ query }}”. Try another search.",
+    "status_no_results": "No results found for “{{ query }}”"
   }
 }

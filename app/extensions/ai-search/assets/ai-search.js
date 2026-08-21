@@ -140,8 +140,28 @@
 
   // ---------- small helpers ----------
 
+  // Liquid's `t` filter HTML-escapes every translation, so a straight quote in
+  // a locale file reaches us as &quot;. We always write through textContent,
+  // so decoding here is safe and cannot inject markup. Locale files should
+  // still prefer typographic quotes; this only stops the class of bug.
+  var ENTITIES = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: '\u00a0' };
+  function decode(text) {
+    if (text.indexOf('&') < 0) return text;
+    return text.replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, function (whole, name) {
+      if (name.charAt(0) === '#') {
+        var code =
+          name.charAt(1) === 'x' || name.charAt(1) === 'X'
+            ? parseInt(name.slice(2), 16)
+            : parseInt(name.slice(1), 10);
+        return code > 0 && code <= 0x10ffff ? String.fromCharCode(code) : whole;
+      }
+      var hit = ENTITIES[name.toLowerCase()];
+      return hit === undefined ? whole : hit;
+    });
+  }
+
   function t(key, vars) {
-    var s = TEXT[key] || '';
+    var s = decode(TEXT[key] || '');
     if (vars) {
       Object.keys(vars).forEach(function (k) {
         s = s.replace(new RegExp('\\{\\{\\s*' + k + '\\s*\\}\\}', 'g'), String(vars[k]));

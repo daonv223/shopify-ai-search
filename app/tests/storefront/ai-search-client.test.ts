@@ -372,6 +372,22 @@ describe("type-ahead interception on a Dawn-shaped search input", () => {
     expect(calls[2]).toBe(calls[1]);
   });
 
+  it("an entity-escaped translation renders as real characters", async () => {
+    // Liquid's `t` filter HTML-escapes every translation, so a straight quote
+    // in a locale file arrives as &quot; and used to print literally.
+    boot(
+      { text: { noResultsFor: "No results found for &quot;{{ query }}&quot;. Try again." } },
+      THEME_HEADER,
+    );
+    fetchMock.mockImplementationOnce(() => respond({ hits: [] }));
+    type("abcxyz");
+    vi.advanceTimersByTime(160);
+    await flush();
+    await flush();
+    expect(empty()!.textContent).toBe('No results found for "abcxyz". Try again.');
+    expect(empty()!.textContent).not.toContain("&quot;");
+  });
+
   it("an empty answer and a failed answer both show the No-results state", async () => {
     // Phase 6 spec section 7 replaces the Phase 4 silent close. We own the
     // whole search surface now, so a blank modal would look broken. A failure
