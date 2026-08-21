@@ -4,16 +4,19 @@
  * Loaded by the app embed on every page (window.AISearchConfig is written by
  * blocks/embed.liquid). Plain ES2019, no build step, no dependencies.
  *
- *  1. Type-ahead: finds the theme's search inputs (Dawn's <predictive-search>
- *     modal, the search-template input, any form[action*="/search"]
- *     input[name="q"]), silences the theme's own predictive handlers on
- *     those inputs (capture-phase stopImmediatePropagation on input/focus
- *     and the keys we own), and mounts our dropdown in a Shadow DOM host
- *     anchored under the input. Debounce 150ms, AbortController per
- *     keystroke, ArrowUp/Down + Enter, Escape, click-outside, ARIA combobox
- *     + live region. A response with semantic:"timeout" (cold embedding
- *     cache — phase4-notes.md) triggers ONE upgrade re-fetch ~600ms later if
- *     the query is unchanged, swapping in the hybrid ranking.
+ *  1. Search modal (Phase 6): document-level CAPTURE listeners for click,
+ *     focusin and keydown take over every search trigger (cfg.triggerSelector)
+ *     before the theme's own handler runs, and open our <dialog> inside a
+ *     Shadow DOM host. The shopper types in OUR input, so we never suppress
+ *     the theme's own field handlers (§4.4). A boot-time probe samples the
+ *     theme's colours into --ais-* tokens on the host (§3.2). Debounce 150ms,
+ *     AbortController per keystroke, GRID keyboard navigation (§5: Arrow
+ *     Down/Up move one row of the live column count, Right/Left one card in
+ *     reading order and swap under rtl, Home/End, Enter), Escape,
+ *     click-outside, ARIA combobox + live region. A response with
+ *     semantic:"timeout" (cold embedding cache — phase4-notes.md) triggers ONE
+ *     upgrade re-fetch ~600ms later if the query is unchanged, swapping in the
+ *     hybrid ranking.
  *  2. Results (block mode): renders [data-ai-search-results] from
  *     /apps/search/results — RTL grid, load more, empty state; on error it
  *     un-hides the theme's native results and links to them.
@@ -28,12 +31,112 @@
   if (!cfg || !cfg.enabled || window.__aiSearchLoaded) return;
   window.__aiSearchLoaded = true;
 
+  // One document, one live run. window.__aiSearchLoaded already stops a plain
+  // double-load, but a re-evaluated script (a theme that injects the asset
+  // twice, a test harness) would otherwise leave the previous run's
+  // capture-phase listeners on `document` for ever — and, now that §4.4 has us
+  // no longer calling stopImmediatePropagation, both runs would answer every
+  // event. Each run stamps the document; every document-level listener and the
+  // MutationObserver below stand down once the stamp moves on.
+  var RUN = Number(document.__aiSearchRun || 0) + 1;
+  document.__aiSearchRun = RUN;
+  function stale() {
+    return document.__aiSearchRun !== RUN;
+  }
+
   var PROXY = cfg.proxy || '/apps/search';
   var TEXT = cfg.text || {};
   var DEBOUNCE_MS = 150;
   var UPGRADE_DELAY_MS = 600;
   var INPUT_SELECTOR = cfg.inputSelector || 'form[action*="/search"] input[name="q"]';
   var FORM_SELECTOR = cfg.formSelector || 'form[action*="/search"]';
+  // Phase 6 §4.2 — a "search trigger" is anything that opens search on the
+  // theme: a link or button to /search, a button or <summary> labelled
+  // "search", or a search field. Merchant-editable, so per-theme support costs
+  // one selector and no new code.
+  var TRIGGER_SELECTOR =
+    cfg.triggerSelector ||
+    [
+      'a[href*="/search"]',
+      'button[formaction*="/search"]',
+      'button[name="search"]',
+      'button[aria-label*="search" i]',
+      'a[aria-label*="search" i]',
+      'summary[aria-label*="search" i]',
+      '[role="button"][aria-label*="search" i]',
+      '.header__icon--search',
+      '[data-ai-search-trigger]',
+      'input[type="search"]',
+      'input[name="q"]',
+    ].join(', ');
+  // Phase 6 §3.2 — probe order. The merchant setting overrides step one only.
+  var PROBE_DIALOG =
+    cfg.probeSelector ||
+    'dialog[class*="search" i], .search-modal__content, .search-modal, predictive-search, [id*="search-modal" i]';
+  var PROBE_HEADER = 'header, .header, #shopify-section-header, [role="banner"]';
+  // The theme's own primary button — the source for --ais-accent.
+  var PROBE_BUTTON =
+    '.button--primary, .btn--primary, button.button, a.button, .shopify-payment-button__button, button[type="submit"]';
+  // Horizon shows 8 cards even when the live region reports more (Phase 6
+  // reference/measurements.md §6). The merchant setting may ask for fewer.
+  var MAX_CARDS = 8;
+  var CARD_LIMIT = Math.min(cfg.maxSuggestions || MAX_CARDS, MAX_CARDS);
+
+  // Text direction. The merchant sets it in the theme editor: "auto" (the
+  // default) follows the storefront, "ltr" or "rtl" force one direction.
+  // "auto" resolves per element from the page, never from a hardcoded value.
+  function pageDir(node) {
+    var d = String(cfg.direction || 'auto').toLowerCase();
+    if (d === 'ltr' || d === 'rtl') return d;
+    var probe = node || document.body || document.documentElement;
+    var explicit = probe.closest && probe.closest('[dir]');
+    if (explicit) {
+      var v = String(explicit.getAttribute('dir') || '').toLowerCase();
+      if (v === 'ltr' || v === 'rtl') return v;
+    }
+    if (window.getComputedStyle) {
+      var cs = window.getComputedStyle(probe);
+      if (cs && cs.direction) return cs.direction;
+    }
+    return 'ltr';
+  }
+  // Phase 6 §5 — the results are a GRID, not a list, so ArrowDown/Up move one
+  // ROW and a row is the live column count. The grid is driven by a CONTAINER
+  // query (repeat(2,1fr), then repeat(4,1fr) at @container min-width:550px),
+  // so the count follows the panel width and a cached value goes stale the
+  // moment the panel is resized. We therefore read it at every keystroke.
+  //
+  // parseGridColumns() is the pure half: it takes whatever the engine reports
+  // for `grid-template-columns` and returns a track count. Browsers report a
+  // resolved track list ("146.7px 146.7px 146.7px 146.7px"); a few report the
+  // specified value ("repeat(4, 1fr)"). Both are handled. Anything we cannot
+  // read returns 0, and the caller degrades to a single column — which makes
+  // ArrowDown/Up behave exactly like the old flat list rather than break.
+  function parseGridColumns(value) {
+    if (!value) return 0;
+    var v = String(value).trim().toLowerCase();
+    if (!v || v === 'none' || v === 'auto' || v === 'initial') return 0;
+    var rep = /repeat\(\s*(\d+)\s*,/.exec(v);
+    if (rep) return Number(rep[1]) || 0;
+    // Drop [line-names], then collapse every function call — minmax(0, 1fr),
+    // fit-content(20%) — to one token so the whitespace split cannot see
+    // inside it.
+    v = v.replace(/\[[^\]]*\]/g, ' ');
+    while (/[a-z-]+\([^()]*\)/.test(v)) v = v.replace(/[a-z-]+\([^()]*\)/g, 'x');
+    v = v.trim();
+    if (!v) return 0;
+    return v.split(/\s+/).length;
+  }
+
+  // <dialog>.showModal() gives us a focus trap, Escape, inertness and a
+  // ::backdrop for free. Where it is missing we mount a plain overlay and do
+  // the trapping ourselves (Phase 6 spec §4.1, task 6.4).
+  var HAS_SHOW_MODAL =
+    typeof HTMLDialogElement !== 'undefined' &&
+    HTMLDialogElement.prototype &&
+    typeof HTMLDialogElement.prototype.showModal === 'function';
+  var FOCUSABLE =
+    'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
   // ---------- small helpers ----------
 
@@ -145,24 +248,154 @@
   function shadow(host) {
     var root = host.attachShadow({ mode: 'open' });
     if (cfg.cssUrl) root.appendChild(el('link', { rel: 'stylesheet', href: cfg.cssUrl }));
+    // Theme CSS cannot cross the shadow boundary, so a merchant has no other
+    // way to restyle the modal. The "Custom CSS" setting lands here, after
+    // our own sheet, so an equal-specificity rule of theirs wins.
+    if (cfg.customCss) {
+      var style = document.createElement('style');
+      style.setAttribute('data-ai-search', 'custom');
+      style.textContent = String(cfg.customCss);
+      root.appendChild(style);
+    }
     return root;
   }
 
-  var liveRegion = null;
-  function announce(message) {
-    if (!liveRegion) {
-      liveRegion = el('div', {
-        role: 'status',
-        'aria-live': 'polite',
-        class: 'ai-search-visually-hidden',
-        style: 'position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;',
-      });
-      document.body.appendChild(liveRegion);
+  // ---------- the runtime style probe (6.6, spec §3.2/§3.3) ----------
+  //
+  // Background, border, radius and shadow do not inherit across the shadow
+  // boundary, so we sample them from the host theme once at boot and write
+  // them onto every shadow host as --ais-* custom properties. Custom
+  // properties DO inherit into a shadow tree, so the whole modal picks them up.
+  //
+  // We read RESOLVED values with getComputedStyle only. We never read a theme
+  // token name: --color-background is not portable (Dawn stores it as the
+  // triplet "255,255,255", so var(--color-background) yields an invalid value
+  // and the CSS fallback never runs).
+  //
+  // Every token stays optional. ai-search.css carries the measured Horizon
+  // value as the var() fallback, so a failed probe degrades to Horizon.
+
+  function isTransparent(color) {
+    if (!color) return true;
+    var c = String(color).replace(/\s+/g, '').toLowerCase();
+    if (c === 'transparent' || c === 'none') return true;
+    // rgba(r,g,b,0) — any fully transparent colour
+    var m = /^rgba?\(([^)]+)\)$/.exec(c);
+    if (m) {
+      var parts = m[1].split(',');
+      if (parts.length > 3 && Number(parts[3]) === 0) return true;
     }
-    liveRegion.textContent = '';
-    setTimeout(function () {
-      liveRegion.textContent = message;
-    }, 50);
+    return false;
+  }
+
+  // rgb(17, 17, 17) -> rgba(17, 17, 17, alpha). Returns '' for any colour
+  // syntax we cannot take apart (color(), oklch(), a named colour): the
+  // caller then leaves the token unset and the CSS fallback runs.
+  function atAlpha(color, alpha) {
+    var m = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(String(color || ''));
+    if (!m) return '';
+    return 'rgba(' + m[1] + ', ' + m[2] + ', ' + m[3] + ', ' + alpha + ')';
+  }
+
+  function probeList(selector) {
+    var out = [];
+    if (!selector) return out;
+    var found;
+    try {
+      found = document.querySelectorAll(selector);
+    } catch (err) {
+      return out; // a merchant typo must never take the modal down
+    }
+    for (var i = 0; i < found.length; i++) out.push(found[i]);
+    return out;
+  }
+
+  var TOKENS = null;
+  function themeTokens() {
+    if (TOKENS) return TOKENS;
+    TOKENS = {};
+    if (!window.getComputedStyle) return TOKENS;
+    // Order: the theme's own search dialog (or the merchant override), then
+    // the site header, then document.body.
+    var order = probeList(PROBE_DIALOG).concat(probeList(PROBE_HEADER));
+    if (document.body) order.push(document.body);
+    var fg = '';
+    for (var i = 0; i < order.length; i++) {
+      var s = window.getComputedStyle(order[i]);
+      if (!s) continue;
+      if (!fg && s.color) fg = s.color;
+      // Skip a transparent background and walk on to the next source.
+      if (isTransparent(s.backgroundColor)) continue;
+      TOKENS['--ais-bg'] = s.backgroundColor;
+      if (s.color) fg = s.color;
+      break;
+    }
+    if (fg) {
+      TOKENS['--ais-fg'] = fg;
+      var border = atAlpha(fg, 0.14);
+      if (border) TOKENS['--ais-border'] = border;
+      var tint = atAlpha(fg, 0.06);
+      if (tint) TOKENS['--ais-tint'] = tint;
+    }
+    // The theme's own primary button gives the "View all" pill and the radius.
+    var buttons = probeList(PROBE_BUTTON);
+    for (var j = 0; j < buttons.length; j++) {
+      var b = window.getComputedStyle(buttons[j]);
+      if (!b || isTransparent(b.backgroundColor)) continue;
+      TOKENS['--ais-accent'] = b.backgroundColor;
+      if (b.color) TOKENS['--ais-accent-fg'] = b.color;
+      if (b.borderRadius && parseFloat(b.borderRadius) > 0) {
+        TOKENS['--ais-radius'] = b.borderRadius;
+      }
+      break;
+    }
+    return TOKENS;
+  }
+
+  function applyTokens(host) {
+    if (!host || !host.style || !host.style.setProperty) return;
+    var map = themeTokens();
+    Object.keys(map).forEach(function (name) {
+      host.style.setProperty(name, map[name]);
+    });
+  }
+
+  // A static-markup icon. createElement() cannot build SVG (wrong namespace),
+  // so we hand the parser a fixed literal — no interpolation, ever.
+  function magnifier() {
+    var span = el('span', { class: 'ai-modal__icon', 'aria-hidden': 'true' });
+    span.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+      'stroke-linecap="round"><circle cx="11" cy="11" r="6.5"></circle>' +
+      '<path d="M16 16l4.5 4.5"></path></svg>';
+    return span;
+  }
+
+  // Phase 6 card — Horizon's resource-card: a 4:5 media box (NOT square) with
+  // object-fit:cover, then title and price. Horizon lays the link over the card
+  // as an absolute overlay; we make the card itself the <a> because it is also
+  // our role=option, and the card holds nothing else clickable.
+  function modalCard(hit, width) {
+    var img =
+      cfg.showImages && hit.image_url
+        ? el('img', {
+            class: 'ai-img',
+            src: imageUrl(hit, width),
+            alt: hit.image_alt || hit.title,
+            loading: 'lazy',
+          })
+        : el('span', { class: 'ai-img ai-img--empty', 'aria-hidden': 'true' });
+    var price = priceText(hit);
+    return el('a', { class: 'ai-card ai-option', href: productUrl(hit) }, [
+      el('span', { class: 'ai-card__media' }, [
+        img,
+        hit.available === false ? el('span', { class: 'ai-badge', text: t('soldOut') }) : null,
+      ]),
+      el('span', { class: 'ai-card__content' }, [
+        el('span', { class: 'ai-title', text: hit.title }),
+        price ? el('span', { class: 'ai-price', text: price }) : null,
+      ]),
+    ]);
   }
 
   function card(hit, opts) {
@@ -180,80 +413,195 @@
     ]);
   }
 
-  // ---------- 1. type-ahead dropdown ----------
+  // ---------- 1. the search modal ----------
+  //
+  // Phase 6: one <dialog> per trigger, inside our own shadow root. The shell,
+  // the header, the results grid and the floating footer copy Horizon —
+  // specs/native-dropdown-parity/reference/measurements.md.
+  //
+  // The trigger takeover is document-level and capture-phase (6.5, §4.2). A
+  // Dropdown is bound to one trigger: a theme search input keeps the combobox
+  // ARIA, everything else (a header icon, a <summary>, a /search link) shares
+  // the first instance and only supplies the focus-return target.
 
   var openDropdown = null; // only one open at a time
   var uid = 0;
+  var instances = [];
+  var closingNow = false; // focus return must not re-trigger the takeover
 
-  function Dropdown(input) {
-    this.input = input;
-    this.form = input.form || input.closest('form');
+  function Dropdown(trigger) {
+    this.trigger = trigger;
+    this.isField = isTextField(trigger);
+    this.form = (this.isField && trigger.form) || (trigger.closest && trigger.closest('form')) || null;
     this.id = 'ai-search-list-' + ++uid;
     this.host = el('div', { class: 'ai-search-host', 'data-ai-search': 'dropdown' });
-    this.host.style.cssText = 'position:fixed;z-index:2147483000;display:none;';
+    // Zero-size anchor: the dialog is either in the browser's top layer or, in
+    // the fallback, a fixed overlay of its own. Nothing here takes space or
+    // swallows a click.
+    this.host.style.cssText =
+      'display:none;position:fixed;inset-block-start:0;inset-inline-start:0;z-index:2147483000;';
+    // 6.6 — sampled theme colours, written as --ais-* on the host. They
+    // inherit into the shadow tree; a missing one falls back in the CSS.
+    applyTokens(this.host);
+    this.host.__aiSearchModal = true; // lets the capture handlers skip our own UI
     this.root = shadow(this.host);
-    this.panel = el('div', { class: 'ai-panel', dir: 'rtl', role: 'listbox', id: this.id });
-    this.root.appendChild(this.panel);
-    document.body.appendChild(this.host);
-    this.mode = 'float'; // 'float' = fixed overlay under the input; 'inline' = in a modal dialog
+    this.native = HAS_SHOW_MODAL;
     this.hits = [];
     this.active = -1;
     this.query = '';
     this.controller = null;
     this.timer = null;
     this.upgradeTimer = null;
-    this.swallowNextKeyup = false;
+    this.opener = null;
+    this.closing = false;
+    this.entered = false;
+    this.build();
+    document.body.appendChild(this.host);
     this.bind();
+    instances.push(this);
   }
+
+  // dialog > [status] > form > (header, panel > (scroll, footer))
+  Dropdown.prototype.build = function () {
+    var placeholder = t('searchPlaceholder') || 'Search';
+
+    this.field = el('input', {
+      type: 'search',
+      name: 'q',
+      class: 'ai-modal__input',
+      autocomplete: 'off',
+      autocapitalize: 'off',
+      spellcheck: 'false',
+      role: 'combobox',
+      'aria-autocomplete': 'list',
+      'aria-expanded': 'false',
+      'aria-controls': this.id,
+      'aria-label': placeholder,
+      placeholder: placeholder,
+    });
+    this.clear = el('button', {
+      type: 'button',
+      class: 'ai-modal__clear',
+      text: t('clear') || 'Clear',
+      hidden: true,
+    });
+    this.closeBtn = el('button', {
+      type: 'button',
+      class: 'ai-modal__close',
+      'aria-label': t('close') || 'Close',
+      text: '×',
+    });
+
+    this.header = el('div', { class: 'ai-modal__header' }, [
+      el('div', { class: 'ai-modal__field' }, [magnifier(), this.field, this.clear]),
+      this.closeBtn,
+    ]);
+
+    this.status = el('div', { class: 'ai-visually-hidden', role: 'status', 'aria-live': 'polite' });
+    this.inner = el('div', { class: 'ai-results-inner' });
+    this.scroll = el('div', { class: 'ai-scroll' }, [this.inner]);
+    this.viewAll = el('a', {
+      class: 'ai-viewall ai-option',
+      role: 'option',
+      id: this.id + '-opt-all',
+      'data-index': '0',
+      'aria-selected': 'false',
+      href: this.resultsHref(''),
+    });
+    this.footer = el('div', { class: 'ai-footer' }, [this.viewAll]);
+    this.panel = el('div', {
+      class: 'ai-panel',
+      role: 'listbox',
+      id: this.id,
+      'data-state': 'blank',
+    });
+    this.panel.appendChild(this.scroll);
+    this.panel.appendChild(this.footer);
+
+    this.searchForm = el(
+      'form',
+      { class: 'ai-modal__form', role: 'search', method: 'get', action: cfg.searchUrl || '/search' },
+      [this.header, this.panel],
+    );
+    this.dialog = el('dialog', { class: 'ai-modal', dir: pageDir(this.trigger), 'aria-label': placeholder }, [
+      this.status,
+      this.searchForm,
+    ]);
+    this.overlay = el('div', { class: 'ai-overlay' }, [this.dialog]);
+    this.root.appendChild(this.overlay);
+  };
 
   Dropdown.prototype.bind = function () {
     var self = this;
-    var input = this.input;
-    input.setAttribute('autocomplete', 'off');
-    input.setAttribute('aria-autocomplete', 'list');
-    input.setAttribute('aria-expanded', 'false');
-    input.setAttribute('role', 'combobox');
+    var input = this.trigger;
+    if (this.isField) {
+      input.setAttribute('autocomplete', 'off');
+      input.setAttribute('aria-autocomplete', 'list');
+      input.setAttribute('aria-expanded', 'false');
+      input.setAttribute('role', 'combobox');
 
-    // Capture-phase listeners on the target run before the theme's own
-    // (bubble/target) listeners — this is what silences Dawn's
-    // <predictive-search> without touching theme code.
-    input.addEventListener(
-      'input',
-      function (e) {
-        e.stopImmediatePropagation();
-        self.onInput();
-      },
-      true,
-    );
-    input.addEventListener(
-      'focus',
-      function (e) {
-        e.stopImmediatePropagation();
-        if (self.hits.length && input.value.trim() === self.query) self.open();
-        else self.onInput();
-      },
-      true,
-    );
-    input.addEventListener(
-      'keydown',
-      function (e) {
-        self.onKeydown(e);
-      },
-      true,
-    );
-    input.addEventListener(
-      'keyup',
-      function (e) {
-        if (self.swallowNextKeyup && e.key === 'Escape') {
-          self.swallowNextKeyup = false;
-          e.stopImmediatePropagation();
-          e.preventDefault();
-        }
-      },
-      true,
-    );
+      // §4.4 — the shopper types in OUR input, so we no longer suppress the
+      // theme's own field handlers. The Phase 4 stopImmediatePropagation calls
+      // on `input`, `focus` and `keyup` are gone; the theme's predictive
+      // dropdown is handled by the §4.3 predictive_selector rule instead.
+      //
+      // These two stay as a mirror, not as a silencer: they cover the narrow
+      // case where text reaches the theme's field anyway (autofill, a theme
+      // that re-focuses its own input, a synthetic event).
+      input.addEventListener(
+        'input',
+        function () {
+          self.field.value = input.value;
+          self.onInput();
+        },
+        true,
+      );
+      input.addEventListener(
+        'keydown',
+        function (e) {
+          self.onKeydown(e);
+        },
+        true,
+      );
+    }
+
+    // ---- our own field owns the typing from here on ----
+    this.field.addEventListener('input', function () {
+      self.onInput();
+    });
+    this.field.addEventListener('keydown', function (e) {
+      self.onKeydown(e);
+    });
+    this.clear.addEventListener('click', function () {
+      self.field.value = '';
+      self.query = '';
+      self.abort();
+      clearTimeout(self.timer);
+      clearTimeout(self.upgradeTimer);
+      self.showBlank();
+      self.focusField();
+    });
+    this.closeBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      self.close();
+    });
+    // A click on the ::backdrop lands on the dialog itself; in the fallback it
+    // lands on our overlay.
+    this.dialog.addEventListener('mousedown', function (e) {
+      if (e.target === self.dialog) self.close();
+    });
+    this.overlay.addEventListener('mousedown', function (e) {
+      if (e.target === self.overlay) self.close();
+    });
+    this.dialog.addEventListener('cancel', function () {
+      self.close();
+    });
+    this.dialog.addEventListener('close', function () {
+      self.close();
+    });
+
     this.panel.addEventListener('mousedown', function (e) {
-      // keep focus in the input while clicking a suggestion
+      // keep the caret in our field while clicking a card
       if (e.target.closest && e.target.closest('a')) return;
       e.preventDefault();
     });
@@ -263,20 +611,41 @@
     });
   };
 
+  Dropdown.prototype.value = function () {
+    return this.field.value.replace(/\s+/g, ' ').trim();
+  };
+
+  Dropdown.prototype.announce = function (message) {
+    var node = this.status;
+    node.textContent = '';
+    setTimeout(function () {
+      node.textContent = message;
+    }, 50);
+  };
+
   Dropdown.prototype.onInput = function () {
     var self = this;
-    var q = this.input.value.replace(/\s+/g, ' ').trim();
+    var q = this.value();
     clearTimeout(this.timer);
     clearTimeout(this.upgradeTimer);
+    this.open();
+    this.syncClear();
+    // Below minChars, and on an empty query: header and footer only. The modal
+    // stays open — spec §7.
     if (q.length < (cfg.minChars || 1)) {
       this.abort();
-      this.close();
       this.query = q;
+      this.showBlank();
       return;
     }
     this.timer = setTimeout(function () {
       self.search(q, false);
     }, DEBOUNCE_MS);
+  };
+
+  Dropdown.prototype.syncClear = function () {
+    if (this.field.value) this.clear.removeAttribute('hidden');
+    else this.clear.setAttribute('hidden', '');
   };
 
   Dropdown.prototype.abort = function () {
@@ -290,20 +659,18 @@
     var controller = new AbortController();
     this.controller = controller;
     this.query = q;
-    fetchJSON(proxyUrl('/suggest', { q: q, limit: cfg.maxSuggestions || 6 }), controller.signal)
+    fetchJSON(proxyUrl('/suggest', { q: q, limit: CARD_LIMIT }), controller.signal)
       .then(function (body) {
         if (controller !== self.controller) return; // superseded
         self.controller = null;
-        if (self.input.value.replace(/\s+/g, ' ').trim() !== q) return; // typed on
+        if (self.value() !== q) return; // typed on
         self.render(body);
         if (!isUpgrade && body.semantic === 'timeout') {
           // Cold embedding cache: the vector is landing in the server's LRU
           // behind this answer — ask once more for the hybrid ranking.
           clearTimeout(self.upgradeTimer);
           self.upgradeTimer = setTimeout(function () {
-            if (self.input.value.replace(/\s+/g, ' ').trim() === q && document.activeElement === self.input) {
-              self.search(q, true);
-            }
+            if (self.value() === q && self.isOpen()) self.search(q, true);
           }, UPGRADE_DELAY_MS);
         }
       })
@@ -311,130 +678,242 @@
         if (err && err.name === 'AbortError') return;
         if (controller !== self.controller) return; // superseded
         self.controller = null;
-        if (self.input.value.replace(/\s+/g, ' ').trim() !== q) return; // typed on
-        // The theme's native dropdown is hidden by our embed CSS, so a silent
-        // close leaves a blank modal. Show an explicit error state instead.
-        self.renderMessage(t('error'));
+        if (self.value() !== q) return; // typed on
+        // §7: there is no separate error state. A proxy failure looks exactly
+        // like an empty result, so the shopper never sees a broken app. The
+        // footer "View all" still reaches the theme's search page.
+        if (window.console && !self.loggedError) {
+          self.loggedError = true;
+          window.console.warn('AI Search: suggest failed', err);
+        }
+        self.renderEmpty();
       });
   };
 
-  // A single-message panel (empty or error). The theme's own "No results"
-  // state cannot show — the embed hides it — so we render our own.
-  Dropdown.prototype.renderMessage = function (message) {
+  // Horizon's search URL, in every state — the way out when we have nothing.
+  Dropdown.prototype.searchBase = function () {
+    return (this.form && this.form.getAttribute('action')) || cfg.searchUrl || '/search';
+  };
+
+  Dropdown.prototype.resultsHref = function (q) {
+    var base = this.searchBase();
+    return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'q=' + encodeURIComponent(q || '');
+  };
+
+  // ---- panel states (6.7): blank | results | empty ----
+
+  Dropdown.prototype.setState = function (state) {
+    this.panel.setAttribute('data-state', state);
+    this.inner.textContent = '';
     this.hits = [];
     this.active = -1;
-    this.panel.textContent = '';
-    this.panel.appendChild(el('div', { class: 'ai-empty', dir: 'auto', text: message }));
-    this.open();
+    this.field.removeAttribute('aria-activedescendant');
+    if (this.isField) this.trigger.removeAttribute('aria-activedescendant');
+    // 6.11 — the entrance animation is a one-shot per open. Every re-render
+    // starts without the class; render() puts it back only on the first one.
+    this.panel.classList.remove('ai-enter');
+    this.viewAll.setAttribute('href', this.resultsHref(this.query));
+    this.viewAll.setAttribute('data-index', '0');
+    this.viewAll.setAttribute('aria-selected', 'false');
+    this.viewAll.classList.remove('is-active');
+    // No results: Horizon hides the footer, so it must leave the listbox too —
+    // an arrow key must not land on an invisible option.
+    if (state === 'empty') this.viewAll.removeAttribute('role');
+    else this.viewAll.setAttribute('role', 'option');
+    // 6.10 adds a dedicated "View all" string; until then reuse Phase 4's.
+    this.viewAll.textContent = t('viewAll') || 'View all';
+    this.searchForm.setAttribute('action', this.searchBase());
+  };
+
+  // Open with an empty (or too-short) query: header and footer only.
+  Dropdown.prototype.showBlank = function () {
+    this.setState('blank');
+    this.setExpanded(false);
+  };
+
+  // No results — and, per §7, a failed or malformed answer too.
+  Dropdown.prototype.renderEmpty = function () {
+    var q = this.query;
+    this.setState('empty');
+    this.setExpanded(false);
+    this.inner.appendChild(
+      el('p', {
+        class: 'ai-empty',
+        dir: 'auto',
+        text: t('noResultsFor', { query: q }) || t('noResults'),
+      }),
+    );
+    // Horizon's live region drops the "Try another search." tail.
+    this.announce(t('statusNoResults', { query: q }) || t('statusResults', { count: 0 }));
   };
 
   Dropdown.prototype.render = function (body) {
     var self = this;
-    var hits = (body.hits || []).slice(0, cfg.maxSuggestions || 6);
-    this.hits = hits;
-    this.active = -1;
-    this.panel.textContent = '';
+    var hits = (body.hits || []).slice(0, CARD_LIMIT);
+    this.query = this.value();
     if (!hits.length) {
-      this.renderMessage(t('noResults'));
-      announce(t('statusResults', { count: 0 }));
+      this.renderEmpty();
       return;
     }
-    var list = el('div', { class: 'ai-list' });
+    this.setState('results');
+    this.hits = hits;
+    var grid = el('div', { class: 'ai-products__grid' });
     hits.forEach(function (hit, i) {
-      var a = card(hit, { width: 120 });
+      var a = modalCard(hit, 400);
       a.setAttribute('role', 'option');
       a.setAttribute('id', self.id + '-opt-' + i);
       a.setAttribute('data-index', String(i));
       a.setAttribute('aria-selected', 'false');
-      a.className += ' ai-option';
-      list.appendChild(a);
+      grid.appendChild(a);
     });
-    this.panel.appendChild(list);
-    var all = el('a', {
-      class: 'ai-show-all ai-option',
-      role: 'option',
-      id: this.id + '-opt-all',
-      'data-index': String(hits.length),
-      'aria-selected': 'false',
-      href: this.resultsHref(this.query),
-      text: t('showAll', { query: this.query }),
-    });
-    this.panel.appendChild(all);
-    this.open();
-    announce(t('statusResults', { count: hits.length }));
-  };
-
-  Dropdown.prototype.resultsHref = function (q) {
-    var base = this.form ? this.form.getAttribute('action') || cfg.searchUrl || '/search' : cfg.searchUrl || '/search';
-    return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'q=' + encodeURIComponent(q);
-  };
-
-  // Themes like Horizon open search inside a native <dialog> shown with
-  // showModal() — that dialog lives in the browser's top layer, which paints
-  // above every z-index. A body-level fixed host is therefore occluded and
-  // never seen. When our input is inside such a modal we mount the host in the
-  // dialog's own flow (top layer, no occlusion) instead of floating it.
-  Dropdown.prototype.mount = function () {
-    var dlg = this.input.closest ? this.input.closest('dialog') : null;
-    var modal = dlg && dlg.open && (!dlg.matches || dlg.matches(':modal'));
-    if (modal) {
-      // A full-width flex column that gains the modal's width when open. Fall
-      // back through generic ancestors for non-Horizon modal markup.
-      var anchor =
-        this.input.closest('.predictive-search-form__content-wrapper') ||
-        this.input.closest('.predictive-search-form__content') ||
-        this.input.closest('form') ||
-        dlg;
-      if (this.mode !== 'inline' || this.host.parentNode !== anchor) {
-        this.mode = 'inline';
-        this.host.style.cssText = 'display:none;position:static;width:100%;';
-        this.panel.style.maxHeight = '60vh';
-        anchor.appendChild(this.host);
-      }
-    } else if (this.mode !== 'float' || this.host.parentNode !== document.body) {
-      this.mode = 'float';
-      this.host.style.cssText = 'position:fixed;z-index:2147483000;display:none;';
-      document.body.appendChild(this.host);
+    this.inner.appendChild(
+      el('div', { class: 'ai-products' }, [
+        el('h4', { class: 'ai-products__title', text: t('productsHeading') || 'Products' }),
+        grid,
+      ]),
+    );
+    this.viewAll.setAttribute('data-index', String(hits.length));
+    this.setExpanded(true);
+    // 6.11 — the cards fade in and slide up, staggered behind the (absent)
+    // query pills. Once per open: replaying it on every keystroke would blink
+    // the whole grid, and §7 says a re-query must not clear what is on screen.
+    if (!this.entered) {
+      this.entered = true;
+      this.panel.classList.add('ai-enter');
     }
+    this.scroll.scrollTop = 0;
+    // The count is the true total, not the number of cards — measurements §10.
+    // Horizon announces the true total and the query, not the card count:
+    // `10 search results found for "snowboard"` (reference/measurements.md §10).
+    this.announce(
+      t('statusResults', {
+        count: body.total === undefined ? hits.length : body.total,
+        query: this.query,
+      }),
+    );
   };
 
-  Dropdown.prototype.position = function () {
-    if (this.mode !== 'float') return; // inline hosts follow the modal's flow
-    var r = this.input.getBoundingClientRect();
-    var width = Math.max(r.width, 280);
-    var left = r.left;
-    if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - 8 - width);
-    this.host.style.top = r.bottom + 4 + 'px';
-    this.host.style.left = left + 'px';
-    this.host.style.width = Math.min(width, window.innerWidth - 16) + 'px';
-    this.panel.style.maxHeight = Math.max(160, window.innerHeight - r.bottom - 24) + 'px';
-  };
+  // ---- open / close (6.4) ----
 
   Dropdown.prototype.open = function () {
+    if (this.isOpen()) return;
     if (openDropdown && openDropdown !== this) openDropdown.close();
     openDropdown = this;
-    this.mount();
-    this.position();
+    // The focus-return target (§5). openFrom() records the real trigger; a
+    // programmatic open falls back to our own field's trigger, never to
+    // document.activeElement — that is usually <body>, which would also make
+    // every outside click look like a click on the trigger.
+    if (!this.opener && this.isField) this.opener = this.trigger;
     this.host.style.display = 'block';
-    this.input.setAttribute('aria-expanded', 'true');
-    this.input.setAttribute('aria-controls', this.id);
-    if (!this.reposition) {
-      var self = this;
-      this.reposition = function () {
-        if (openDropdown === self) self.position();
+    // aria-controls always points at the listbox; aria-expanded stays owned by
+    // the panel state (setExpanded), because an open modal with a blank panel
+    // is showing no options at all.
+    if (this.isField) this.trigger.setAttribute('aria-controls', this.id);
+    this.entered = false; // 6.11 — the entrance animation runs once per open
+    if (this.native && this.dialog.showModal) {
+      try {
+        if (!this.dialog.open) this.dialog.showModal();
+      } catch (err) {
+        this.native = false;
+      }
+    }
+    if (!this.native) this.openFallback();
+    // §4.3 guard 2 — belt and braces for a theme that opens its drawer on
+    // pointerdown or through a router we never see. Once, on open only: we are
+    // already marked open above, so the focus churn this causes cannot
+    // re-enter the takeover.
+    closeThemeContainers();
+    this.syncClear();
+    this.focusField();
+  };
+
+  // §4.2/§4.4 — a trigger opened us. Seed our field from the trigger (its
+  // current text, or the character that opened the modal), then let §7 pick
+  // the panel state.
+  Dropdown.prototype.openFrom = function (trigger, seed) {
+    this.opener = trigger || document.activeElement;
+    if (seed !== undefined && seed !== null) this.field.value = seed;
+    this.open();
+    this.focusField();
+    if (this.value()) this.onInput();
+    else this.showBlank();
+    this.syncClear();
+  };
+
+  // No HTMLDialogElement.prototype.showModal: mount a plain overlay and trap
+  // focus ourselves (spec §4.1, acceptance A8).
+  Dropdown.prototype.openFallback = function () {
+    var self = this;
+    this.dialog.setAttribute('open', '');
+    this.overlay.classList.add('is-fallback');
+    if (!this.trap) {
+      this.trap = function (e) {
+        if (e.key !== 'Tab') return;
+        var items = self.dialog.querySelectorAll(FOCUSABLE);
+        if (!items.length) return;
+        var first = items[0];
+        var last = items[items.length - 1];
+        var current = self.root.activeElement || document.activeElement;
+        if (e.shiftKey && current === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && current === last) {
+          e.preventDefault();
+          first.focus();
+        }
       };
-      window.addEventListener('scroll', this.reposition, true);
-      window.addEventListener('resize', this.reposition);
+    }
+    this.dialog.addEventListener('keydown', this.trap);
+  };
+
+  Dropdown.prototype.focusField = function () {
+    try {
+      this.field.focus();
+    } catch (err) {
+      /* jsdom / detached host */
     }
   };
 
   Dropdown.prototype.close = function () {
+    if (!this.isOpen()) return;
+    this.closing = true; // native focus return must not re-trigger the trigger
+    closingNow = true;
     clearTimeout(this.upgradeTimer);
+    // Set this first: dialog.close() fires a synchronous "close" event that
+    // calls us again, and isOpen() is the recursion guard.
     this.host.style.display = 'none';
-    this.input.setAttribute('aria-expanded', 'false');
-    this.input.removeAttribute('aria-activedescendant');
+    this.setExpanded(false);
+    this.field.removeAttribute('aria-activedescendant');
+    this.panel.classList.remove('ai-enter');
+    this.entered = false;
     this.active = -1;
+    if (this.native && this.dialog.close) {
+      try {
+        if (this.dialog.open) this.dialog.close();
+      } catch (err) {
+        /* already closed */
+      }
+    } else {
+      this.dialog.removeAttribute('open');
+      this.overlay.classList.remove('is-fallback');
+      if (this.trap) this.dialog.removeEventListener('keydown', this.trap);
+    }
+    // §5 — focus returns to the trigger that opened us. showModal() restores
+    // it for us in a real browser, but only to whatever had focus before, and
+    // the fallback path does nothing at all. Do it explicitly, from the
+    // trigger we recorded, and guard the takeover while we do (closingNow).
+    var back = this.opener || (this.isField ? this.trigger : null);
+    this.opener = null;
+    if (back && typeof back.focus === 'function' && back.isConnected !== false) {
+      try {
+        back.focus();
+      } catch (err) {
+        /* gone */
+      }
+    }
     if (openDropdown === this) openDropdown = null;
+    this.closing = false;
+    closingNow = false;
   };
 
   Dropdown.prototype.isOpen = function () {
@@ -443,6 +922,87 @@
 
   Dropdown.prototype.options = function () {
     return this.panel.querySelectorAll('[role="option"]');
+  };
+
+  // The product cards, in DOM order. options() is cards-then-"View all",
+  // because the grid sits in the scroller and the footer comes after it.
+  Dropdown.prototype.cardCount = function () {
+    return this.panel.querySelectorAll('.ai-card[role="option"]').length;
+  };
+
+  // §5 — the live column count, re-read at every keystroke, never cached.
+  // A missing or unmeasurable grid degrades to 1, which turns ArrowDown/Up
+  // back into the flat one-card-at-a-time walk.
+  Dropdown.prototype.columns = function () {
+    var grid = this.panel.querySelector('.ai-products__grid');
+    if (!grid || !window.getComputedStyle) return 1;
+    var cs;
+    try {
+      cs = window.getComputedStyle(grid);
+    } catch (err) {
+      return 1;
+    }
+    if (!cs) return 1;
+    var raw = cs.gridTemplateColumns;
+    if (!raw && cs.getPropertyValue) raw = cs.getPropertyValue('grid-template-columns');
+    var n = parseGridColumns(raw);
+    return n > 0 ? n : 1;
+  };
+
+  // §5/§6 — reading order depends on the RESOLVED direction of the dialog,
+  // never on a config guess. The dir attribute on the dialog is the value that
+  // actually applied (pageDir() already resolved "auto" against the page, and
+  // §6 puts dir on the dialog and nowhere else). Custom CSS can still force
+  // rtl on top of it, so a computed direction of "rtl" wins.
+  Dropdown.prototype.isRtl = function () {
+    if (window.getComputedStyle) {
+      var cs;
+      try {
+        cs = window.getComputedStyle(this.dialog);
+      } catch (err) {
+        cs = null;
+      }
+      if (cs && String(cs.direction).toLowerCase() === 'rtl') return true;
+    }
+    var attr = String(this.dialog.getAttribute('dir') || '').toLowerCase();
+    if (attr === 'rtl' || attr === 'ltr') return attr === 'rtl';
+    return false;
+  };
+
+  // aria-expanded is true exactly when options are showing — so the blank and
+  // the no-results states are both false. The theme's own field is a combobox
+  // too (we set the role in bind()), so it mirrors ours.
+  Dropdown.prototype.setExpanded = function (on) {
+    this.field.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (this.isField) {
+      this.trigger.setAttribute('aria-expanded', on ? 'true' : 'false');
+      this.trigger.setAttribute('aria-controls', this.id);
+      if (!on) this.trigger.removeAttribute('aria-activedescendant');
+    }
+  };
+
+  // §5 — ArrowDown/ArrowUp move one ROW. The "View all" pill is the last
+  // option and its own last row, so a step down past the final row of cards
+  // lands on it. A step past either outer edge returns to -1, the input, which
+  // is where the shopper edits the query; the next step wraps round again.
+  Dropdown.prototype.moveRow = function (delta) {
+    var opts = this.options();
+    if (!opts.length) return;
+    var last = opts.length - 1;
+    var cards = this.cardCount();
+    var i = this.active;
+    var next;
+    if (i < 0) {
+      next = delta > 0 ? 0 : last;
+    } else if (i >= cards) {
+      // On "View all" (or any trailing non-card option).
+      next = delta > 0 ? -1 : cards ? cards - 1 : -1;
+    } else {
+      next = i + delta * this.columns();
+      if (next >= cards) next = last >= cards ? last : -1;
+      else if (next < 0) next = -1;
+    }
+    this.setActive(next, true);
   };
 
   Dropdown.prototype.setActive = function (index, scroll) {
@@ -457,35 +1017,70 @@
       opts[i].classList.toggle('is-active', on);
       if (on && scroll && opts[i].scrollIntoView) opts[i].scrollIntoView({ block: 'nearest' });
     }
-    // aria-activedescendant cannot cross the shadow boundary; the live
-    // region carries the active title instead.
-    if (index >= 0) announce(opts[index].textContent.trim());
+    // Our input and our options now share a shadow root, so
+    // aria-activedescendant finally works — Phase 4 had to announce instead.
+    // It points at the active option's id, and it is REMOVED when none is
+    // active. The theme's own field is a combobox too, so it mirrors.
+    if (index >= 0) {
+      this.field.setAttribute('aria-activedescendant', opts[index].id);
+      if (this.isField) this.trigger.setAttribute('aria-activedescendant', opts[index].id);
+    } else {
+      this.field.removeAttribute('aria-activedescendant');
+      if (this.isField) this.trigger.removeAttribute('aria-activedescendant');
+    }
   };
 
+  // §4.4 — stopPropagation, never stopImmediatePropagation. We keep the key
+  // away from the theme's document-level handlers but we no longer suppress a
+  // handler the theme bound to its own field.
   Dropdown.prototype.onKeydown = function (e) {
     var open = this.isOpen();
+    var mine = e.target === this.field;
     switch (e.key) {
       case 'ArrowDown':
         if (!open && this.hits.length) this.open();
         e.preventDefault();
-        e.stopImmediatePropagation();
-        this.setActive(this.active + 1, true);
+        e.stopPropagation();
+        this.moveRow(1);
         return;
       case 'ArrowUp':
         if (!open) return;
         e.preventDefault();
-        e.stopImmediatePropagation();
-        this.setActive(this.active - 1, true);
+        e.stopPropagation();
+        this.moveRow(-1);
+        return;
+      // §5 — one CARD in reading order. Under dir=rtl the two keys swap, so
+      // ArrowLeft moves forward. They only take the key once the grid already
+      // has an active card: before that the arrows still move the caret, which
+      // is the only way the shopper can edit the query they just typed.
+      case 'ArrowRight':
+      case 'ArrowLeft':
+        if (!open || this.active < 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.setActive(this.active + ((e.key === 'ArrowRight') !== this.isRtl() ? 1 : -1), true);
+        return;
+      // §5 — first card / last option. Same caret rule as the two above.
+      case 'Home':
+        if (!open || this.active < 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.setActive(0, true);
+        return;
+      case 'End':
+        if (!open || this.active < 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.setActive(this.options().length - 1, true);
         return;
       case 'Escape':
         if (!open) return;
         e.preventDefault();
-        e.stopImmediatePropagation();
-        this.swallowNextKeyup = true; // keep Dawn's modal open on the same keystroke
+        e.stopPropagation();
         this.close();
         return;
       case 'Enter':
-        e.stopImmediatePropagation(); // theme must not hijack the submit
+        e.stopPropagation(); // theme must not hijack the submit
         if (open && this.active >= 0) {
           var opt = this.options()[this.active];
           if (opt && opt.getAttribute('href')) {
@@ -494,11 +1089,14 @@
           }
           return;
         }
-        // No active option: let the form submit to the results page.
-        this.close();
+        // No active option: our own form submits to the results page; the
+        // theme's trigger form does the same on its side.
+        if (!mine) this.close();
         return;
       case 'Tab':
-        this.close();
+        // <dialog> owns Tab inside the modal — §5. Only the theme trigger
+        // still closes on Tab.
+        if (!mine && !this.native) this.close();
         return;
       default:
         return;
@@ -522,12 +1120,191 @@
     }
   }
 
+  // A search field gets its own Dropdown, so the combobox ARIA lands on the
+  // element the shopper's screen reader is already on. Every other trigger —
+  // an icon, a <summary>, a /search link — shares one modal.
+  function dropdownFor(trigger) {
+    if (isTextField(trigger)) return attachDropdown(trigger);
+    if (instances.length) return instances[0];
+    return attachDropdown(trigger);
+  }
+
+  // ---------- 1b. the trigger takeover (6.5, spec §4.2/§4.3/§4.4) ----------
+  //
+  // Three listeners on `document`, in the CAPTURE phase, so they run before
+  // the theme's own handlers and the theme's search UI never opens. Per §4.2
+  // this is one step earlier than Phase 4's per-input interception: we take
+  // the trigger, not the field, so we never have to fight the theme's input
+  // handlers.
+
+  function isTextField(node) {
+    if (!node || node.nodeType !== 1 || !node.tagName) return false;
+    var tag = node.tagName.toLowerCase();
+    if (tag === 'textarea') return true;
+    if (tag !== 'input') return false;
+    var type = String(node.getAttribute('type') || 'text').toLowerCase();
+    return (
+      type !== 'hidden' &&
+      type !== 'checkbox' &&
+      type !== 'radio' &&
+      type !== 'submit' &&
+      type !== 'button' &&
+      type !== 'image' &&
+      type !== 'file'
+    );
+  }
+
+  function isEditable(node) {
+    return isTextField(node) || (node && node.isContentEditable === true);
+  }
+
+  function matchesTrigger(node) {
+    if (!node || node.nodeType !== 1 || !node.matches) return false;
+    try {
+      return node.matches(TRIGGER_SELECTOR);
+    } catch (err) {
+      return false; // a merchant typo must never take search down
+    }
+  }
+
+  function eventPath(e) {
+    return e.composedPath ? e.composedPath() : [e.target];
+  }
+
+  // Our own modal lives in a shadow root, so at document level the event
+  // retargets to the host. Walk the composed path instead: it gives us both
+  // the real target and a way to recognise our own UI.
+  function isOurs(path) {
+    for (var i = 0; i < path.length; i++) {
+      if (path[i] && path[i].__aiSearchModal) return true;
+    }
+    return false;
+  }
+
+  // Our own light-DOM output (the proxy-mode results page and its "load more"
+  // link) points at /apps/search, so it matches a[href*="/search"]. It is not
+  // a trigger — checked before the trigger test, on the way up.
+  var NOT_TRIGGER = '[data-ai-search-more], [data-ai-search-page]';
+
+  function triggerInPath(path) {
+    for (var i = 0; i < path.length; i++) {
+      var node = path[i];
+      if (node === document || node === window) return null;
+      if (node && node.nodeType === 1 && node.matches && node.matches(NOT_TRIGGER)) return null;
+      if (matchesTrigger(node)) return node;
+    }
+    return null;
+  }
+
+  // §4.3 guard 2 — some themes open their drawer on pointerdown, or through a
+  // router we never see. When our modal opens, close any open <dialog> or
+  // <details> in the light DOM that carries a search trigger. Once, on open
+  // only: Dropdown.open() returns early when it is already open.
+  function closeThemeContainers() {
+    var nodes;
+    try {
+      nodes = document.querySelectorAll('dialog[open], details[open]');
+    } catch (err) {
+      return;
+    }
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var holds = matchesTrigger(n);
+      if (!holds) {
+        try {
+          holds = !!n.querySelector(TRIGGER_SELECTOR);
+        } catch (err) {
+          holds = false;
+        }
+      }
+      if (!holds) continue;
+      if (n.tagName === 'DIALOG' && typeof n.close === 'function') {
+        try {
+          n.close();
+        } catch (err) {
+          n.removeAttribute('open');
+        }
+      } else {
+        n.removeAttribute('open');
+      }
+    }
+  }
+
+  // click → preventDefault, stopPropagation, open our modal, focus our input.
+  document.addEventListener(
+    'click',
+    function (e) {
+      if (stale()) return;
+      if (e.button && e.button !== 0) return;
+      if (e.defaultPrevented) return;
+      // cmd/ctrl/shift-click on a link is "open the search page in a new
+      // tab/window". Leave it to the browser.
+      if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+      var path = eventPath(e);
+      if (isOurs(path)) return;
+      var trigger = triggerInPath(path);
+      if (!trigger) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var dd = dropdownFor(trigger);
+      dd.openFrom(trigger, isTextField(trigger) ? trigger.value || '' : undefined);
+    },
+    true,
+  );
+
+  // focusin → the shopper reached the theme's search field (tab, autofocus, a
+  // drawer that focuses it on open). Open our modal and move focus to OUR
+  // input. Only a field does this: a focused button must stay tabbable.
+  document.addEventListener(
+    'focusin',
+    function (e) {
+      if (stale() || closingNow) return; // ours, or a superseded run
+      var path = eventPath(e);
+      if (isOurs(path)) return;
+      var target = path[0] || e.target;
+      if (!isTextField(target) || !matchesTrigger(target)) return;
+      var dd = dropdownFor(target);
+      if (dd.isOpen()) return;
+      dd.openFrom(target, target.value || '');
+    },
+    true,
+  );
+
+  // keydown → the theme's own keyboard shortcut ("/" or cmd/ctrl+K), and the
+  // §4.4 first-character carry: a printable key pressed on a trigger that is
+  // not a field opens the modal with that character already typed.
+  document.addEventListener(
+    'keydown',
+    function (e) {
+      if (stale()) return;
+      if (openDropdown) return; // the open modal owns its own keys
+      if (e.defaultPrevented) return;
+      var path = eventPath(e);
+      if (isOurs(path)) return;
+      var target = path[0] || e.target;
+      var shortcut =
+        (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !isEditable(target)) ||
+        ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'k' || e.key === 'K'));
+      var trigger = triggerInPath(path);
+      var printable = e.key && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey;
+      var carry = trigger && !isTextField(trigger) && printable;
+      if (!shortcut && !carry) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var dd = dropdownFor(trigger || document.body);
+      dd.openFrom(trigger || document.activeElement, carry ? e.key : '');
+    },
+    true,
+  );
+
   document.addEventListener(
     'mousedown',
     function (e) {
-      if (!openDropdown) return;
-      var path = e.composedPath ? e.composedPath() : [e.target];
-      if (path.indexOf(openDropdown.host) >= 0 || path.indexOf(openDropdown.input) >= 0) return;
+      if (stale() || !openDropdown) return;
+      var path = eventPath(e);
+      if (isOurs(path) || path.indexOf(openDropdown.host) >= 0) return;
+      if (openDropdown.trigger && path.indexOf(openDropdown.trigger) >= 0) return;
+      if (openDropdown.opener && path.indexOf(openDropdown.opener) >= 0) return;
       openDropdown.close();
     },
     true,
@@ -556,8 +1333,9 @@
     this.query = new URLSearchParams(window.location.search).get('q') || cfg.searchTerms || '';
     this.query = this.query.replace(/\s+/g, ' ').trim();
     this.page = 0;
+    applyTokens(container); // 6.6 — same sampled tokens as the modal
     this.root = shadow(container);
-    this.wrap = el('div', { class: 'ai-results', dir: 'rtl' });
+    this.wrap = el('div', { class: 'ai-results', dir: pageDir(container) });
     this.root.appendChild(this.wrap);
     this.render();
   }
@@ -709,14 +1487,25 @@
     // Themes that render search UI late (drawers, lazy sections).
     if (window.MutationObserver) {
       var pending = null;
-      new MutationObserver(function () {
+      var observer = new MutationObserver(function () {
+        if (stale()) {
+          observer.disconnect();
+          return;
+        }
         if (pending) return;
         pending = setTimeout(function () {
           pending = null;
+          // The run guard again. The observer stands down the moment the stamp
+          // moves on, but a debounce it had already scheduled would still fire
+          // — and attachAll() would then build a SECOND Dropdown on a field the
+          // live run already owns, whose bind() resets the field's combobox
+          // ARIA underneath it. Stand down here too.
+          if (stale()) return;
           attachAll(document);
           if (cfg.resultsMode === 'proxy') rewriteForms(document);
         }, 100);
-      }).observe(document.documentElement, { childList: true, subtree: true });
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
     }
   }
 

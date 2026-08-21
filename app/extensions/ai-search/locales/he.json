@@ -9,8 +9,14 @@
     "sold_out": "אזל מהמלאי",
     "results_for": "תוצאות חיפוש עבור „{{ query }}”",
     "results_count": "{{ count }} מוצרים",
-    "status_results": "{{ count }} הצעות",
+    "status_results": "נמצאו {{ count }} תוצאות חיפוש עבור „{{ query }}”",
     "search_placeholder": "חיפוש",
-    "search_button": "חיפוש"
+    "search_button": "חיפוש",
+    "view_all": "הצג הכל",
+    "products_heading": "מוצרים",
+    "clear": "נקה",
+    "close": "סגירת החלון",
+    "no_results_for": "לא נמצאו תוצאות עבור „{{ query }}”. נסו חיפוש אחר.",
+    "status_no_results": "לא נמצאו תוצאות עבור „{{ query }}”"
   }
 }

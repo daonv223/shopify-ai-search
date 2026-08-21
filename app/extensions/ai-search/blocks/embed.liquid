@@ -30,12 +30,16 @@
       minChars: {{ block.settings.min_chars | default: 1 }},
       inputSelector: {{ block.settings.input_selector | strip | json }},
       formSelector: {{ block.settings.form_selector | strip | json }},
+      triggerSelector: {{ block.settings.trigger_selector | strip | json }},
+      probeSelector: {{ block.settings.probe_selector | strip | json }},
       nativeResultsSelector: {{ block.settings.native_results_selector | strip | json }},
       isSearchPage: {{ is_search | json }},
       searchTerms: {{ search.terms | default: '' | json }},
       searchUrl: {{ routes.search_url | json }},
       moneyFormat: {{ shop.money_format | json }},
       locale: {{ request.locale.iso_code | json }},
+      direction: {{ block.settings.direction | default: 'auto' | json }},
+      customCss: {{ block.settings.custom_css | strip | json }},
       text: {
         showAll: {{ 'ai_search.show_all' | t | json }},
         noResults: {{ 'ai_search.no_results' | t | json }},
@@ -48,7 +52,13 @@
         resultsCount: {{ 'ai_search.results_count' | t | json }},
         statusResults: {{ 'ai_search.status_results' | t | json }},
         searchPlaceholder: {{ 'ai_search.search_placeholder' | t | json }},
-        searchButton: {{ 'ai_search.search_button' | t | json }}
+        searchButton: {{ 'ai_search.search_button' | t | json }},
+        viewAll: {{ 'ai_search.view_all' | t | json }},
+        productsHeading: {{ 'ai_search.products_heading' | t | json }},
+        clear: {{ 'ai_search.clear' | t | json }},
+        close: {{ 'ai_search.close' | t | json }},
+        noResultsFor: {{ 'ai_search.no_results_for' | t | json }},
+        statusNoResults: {{ 'ai_search.status_no_results' | t | json }}
       }
     };
   </script>
@@ -78,9 +88,25 @@
       ],
       "default": "block"
     },
+    { "type": "header", "content": "t:embed.style_header" },
+    {
+      "type": "select",
+      "id": "direction",
+      "label": "t:embed.direction.label",
+      "info": "t:embed.direction.info",
+      "options": [
+        { "value": "auto", "label": "t:embed.direction.auto" },
+        { "value": "ltr", "label": "t:embed.direction.ltr" },
+        { "value": "rtl", "label": "t:embed.direction.rtl" }
+      ],
+      "default": "auto"
+    },
+    { "type": "textarea", "id": "custom_css", "label": "t:embed.custom_css.label", "info": "t:embed.custom_css.info" },
     { "type": "header", "content": "t:embed.advanced_header" },
     { "type": "text", "id": "input_selector", "label": "t:embed.input_selector.label", "info": "t:embed.input_selector.info" },
     { "type": "text", "id": "form_selector", "label": "t:embed.form_selector.label", "info": "t:embed.form_selector.info" },
+    { "type": "textarea", "id": "trigger_selector", "label": "t:embed.trigger_selector.label", "info": "t:embed.trigger_selector.info" },
+    { "type": "text", "id": "probe_selector", "label": "t:embed.probe_selector.label", "info": "t:embed.probe_selector.info" },
     { "type": "text", "id": "predictive_selector", "label": "t:embed.predictive_selector.label", "info": "t:embed.predictive_selector.info" },
     { "type": "text", "id": "native_results_selector", "label": "t:embed.native_results_selector.label", "info": "t:embed.native_results_selector.info" }
   ]
