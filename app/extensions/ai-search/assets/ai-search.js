@@ -824,6 +824,7 @@
     // already marked open above, so the focus churn this causes cannot
     // re-enter the takeover.
     closeThemeContainers();
+    watchThemeContainers(true);
     this.syncClear();
     this.focusField();
   };
@@ -879,6 +880,7 @@
     if (!this.isOpen()) return;
     this.closing = true; // native focus return must not re-trigger the trigger
     closingNow = true;
+    watchThemeContainers(false);
     clearTimeout(this.upgradeTimer);
     // Set this first: dialog.close() fires a synchronous "close" event that
     // calls us again, and isOpen() is the recursion guard.
@@ -1228,6 +1230,40 @@
       } else {
         n.removeAttribute('open');
       }
+    }
+  }
+
+  // §4.3 guard 3. Closing the theme's containers once, at our open, only helps
+  // when they are already open. A theme can open its own search dialog AFTER
+  // ours — through a router, a delayed component upgrade, or a path our
+  // capture-phase handlers never see. When that happens its ::backdrop paints
+  // over our modal (the whole panel greys out) and its header lands on top of
+  // ours, so the shopper sees two search bars. So we watch while we are open.
+  var themeWatch = null;
+  function watchThemeContainers(on) {
+    if (!on) {
+      if (themeWatch) themeWatch.disconnect();
+      themeWatch = null;
+      return;
+    }
+    if (themeWatch || typeof MutationObserver !== 'function' || !document.documentElement) return;
+    themeWatch = new MutationObserver(function () {
+      if (stale()) {
+        watchThemeContainers(false);
+        return;
+      }
+      // Converges: closeThemeContainers only closes containers that hold a
+      // search trigger, and a closed one no longer matches dialog[open].
+      closeThemeContainers();
+    });
+    try {
+      themeWatch.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['open'],
+        subtree: true,
+      });
+    } catch (err) {
+      themeWatch = null;
     }
   }
 

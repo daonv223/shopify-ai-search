@@ -691,6 +691,40 @@ describe("trigger takeover (spec §4.2/§4.3/§4.4)", () => {
     expect(options()).toHaveLength(0);
   });
 
+  it("a theme container that opens AFTER us is closed too", async () => {
+    // §4.3 guard 3. Closing once at our open only helps when the theme's
+    // container is already open. Horizon can open its own search dialog later
+    // — a router, a delayed component upgrade, a path our capture-phase
+    // handlers never see. Its ::backdrop then paints over our modal, so the
+    // whole panel greys out, and its header lands on top of ours.
+    boot({}, THEME_HEADER);
+    const drawer = document.getElementById("theme-search-drawer") as HTMLDetailsElement;
+    drawer.open = false;
+    clickOn(toggle());
+    expect(host().style.display).toBe("block");
+    expect(drawer.open).toBe(false);
+
+    // the theme opens its own container behind our back
+    drawer.open = true;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(drawer.open).toBe(false);
+  });
+
+  it("the watch stops when we close, so the theme keeps its own search", async () => {
+    boot({}, THEME_HEADER);
+    const drawer = document.getElementById("theme-search-drawer") as HTMLDetailsElement;
+    drawer.open = false;
+    clickOn(toggle());
+    (host().shadowRoot!.querySelector(".ai-modal__close") as HTMLElement).click();
+    expect(host().style.display).toBe("none");
+
+    drawer.open = true;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(drawer.open).toBe(true);
+  });
+
   it("the default trigger list also covers a plain link to /search", () => {
     boot({}, `${THEME_HEADER}<a id="menu-search" href="/search">Search</a>`);
     const link = document.getElementById("menu-search")!;

@@ -243,7 +243,14 @@ see. Two guards:
 1. Keep the `predictive_selector` rule that hides the theme's own predictive
    results. It stays merchant-editable.
 2. When our modal opens, close any open `dialog` or `details` in the light
-   DOM that carries a search trigger. Close it once, on open only.
+   DOM that carries a search trigger.
+3. **Keep watching while we are open.** A theme can open its own search
+   dialog *after* ours, through a router, a delayed component upgrade, or a
+   path our capture-phase handlers never see. When that happens its
+   `::backdrop` paints over our modal — the whole panel greys out — and its
+   header lands on top of ours, so the shopper sees two search bars and two
+   Clear buttons. A `MutationObserver` on the `open` attribute closes it. The
+   watch stops when we close, so the theme keeps its own search after that.
 
 ### 4.4 The input is ours
 
