@@ -1,0 +1,3 @@
+- Building Shopify App:  AI Search for Hebrew Shopify Stores
+- I have 6 experience of software engineering, but don't have experience on shopify
+- try to stick to ASD-STE100 Simplified Technical English, keep answers short and to the point
