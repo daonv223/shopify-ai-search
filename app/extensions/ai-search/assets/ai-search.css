@@ -262,44 +262,74 @@ input { font: inherit; color: inherit; }
   .ai-modal .ai-products__grid { grid-template-columns: repeat(4, 1fr); }
 }
 
-/* ---------- 5. the card (6.3) ---------- */
+/* ---------- 5. the card — shared by the modal and the results page (7.2) ----
 
-.ai-modal .ai-card {
+   Phase 7 §5.7. One builder (modalCard) makes one markup shape, so one set of
+   structure rules serves both surfaces. Only the values differ, and they
+   differ in six places — see the table in
+   specs/search-results-parity/reference/measurements.md §11.
+
+   Three scopes, and nothing else:
+
+     .ai-card              structure. Both surfaces.
+     .ai-modal .ai-card    the modal values.   Phase 6 measurements.
+     .ai-results .ai-card  the page values.    Phase 7 measurements.
+
+   A value that belongs to one surface must never sit in the shared block.
+   Phase 7 C10 is the guard: the split must not move a pixel in the modal. */
+
+.ai-card {
   display: flex;
   flex-direction: column;
   position: relative;
   cursor: pointer;
 }
-.ai-modal .ai-card__media {
+.ai-card__media {
   position: relative;
   display: block;
   inline-size: 100%;
 }
-.ai-modal .ai-img,
-.ai-modal .ai-img--empty {
+.ai-img,
+.ai-img--empty {
   display: block;
   inline-size: 100%;
-  /* 4:5, not square — measurements.md §7 */
-  aspect-ratio: 4 / 5;
   object-fit: cover;
   background: var(--ais-tint, rgba(0, 0, 0, 0.05));
 }
-.ai-modal .ai-badge {
+.ai-badge {
   position: absolute;
   inset-block-start: 8px;
+  background: var(--ais-tint, rgba(0, 0, 0, 0.05));
+  color: inherit;
+}
+.ai-card__content {
+  display: flex;
+  flex-direction: column;
+}
+.ai-title {
+  font-size: 14px;
+  font-weight: 400;
+}
+.ai-price {
+  display: block;
+  font-weight: 500;
+}
+
+/* ---------- 5a. the modal card (6.3) ---------- */
+
+/* 4:5, not square — Phase 6 measurements.md §7 */
+.ai-modal .ai-img,
+.ai-modal .ai-img--empty { aspect-ratio: 4 / 5; }
+.ai-modal .ai-badge {
   inset-inline-start: 8px;
   font-size: 12px;
   line-height: 1.4;
   padding-block: 2px;
   padding-inline: 8px;
   border-radius: 40px;
-  background: var(--ais-tint, rgba(0, 0, 0, 0.05));
-  color: inherit;
   backdrop-filter: blur(4px);
 }
 .ai-modal .ai-card__content {
-  display: flex;
-  flex-direction: column;
   gap: 2px;
   margin-block-start: 8px;
 }
@@ -309,19 +339,51 @@ input { font: inherit; color: inherit; }
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 14px;
   line-height: 18.2px;
-  font-weight: 400;
 }
 .ai-modal .ai-price {
-  display: block;
   font-size: 14px;
   line-height: 22.4px;
-  font-weight: 500;
 }
 .ai-modal .ai-card:hover .ai-title,
 .ai-modal .ai-card.is-active .ai-title { text-decoration: underline; }
 .ai-modal .ai-card.is-active { outline: 2px solid currentColor; outline-offset: 2px; }
+
+/* ---------- 5b. the results-page card (7.2) ----------
+
+   Six values differ from the modal. Every one of them is measured:
+   Phase 7 reference/measurements.md §6.2, §6.3 and §6.4.
+
+     media ratio  1:1, not 4:5     — §3.2 A of the spec explains why it is
+                                     fixed and not the image's own ratio
+     badge        inline END       — Horizon puts it top-right here,
+                                     top-left in the modal
+     badge        no blur          — the modal blurs, this one does not
+     title        no line clamp    — Horizon does not clamp on the page
+     price        12px, not 14px
+     hover        nothing changes  — the modal underlines the title. Horizon's
+                                     page card only reveals a quick-add button,
+                                     and we have no quick-add. */
+
+.ai-results .ai-img,
+.ai-results .ai-img--empty { aspect-ratio: 1 / 1; }
+.ai-results .ai-badge {
+  inset-inline-end: 8px;
+  font-size: 13px;
+  line-height: 20.8px;
+  padding-block: 4px;
+  padding-inline: 10px;
+  border-radius: 100px;
+}
+.ai-results .ai-card__content {
+  gap: 4px;
+  margin-block-start: 4px;
+}
+.ai-results .ai-title { line-height: 22.4px; }
+.ai-results .ai-price {
+  font-size: 12px;
+  line-height: 14.4px;
+}
 
 /* ---------- 6. empty state (6.3 / 6.7) ---------- */
 
@@ -443,74 +505,188 @@ input { font: inherit; color: inherit; }
   }
 }
 
-/* ---------- 9. results grid (block mode, unchanged from Phase 4) ---------- */
+/* ---------- 9. the search results page (7.3) ----------
+
+   Phase 7. Every value here is measured on the Horizon search page:
+   specs/search-results-parity/reference/measurements.md.
+
+   Two things this section does NOT copy, and the spec says why:
+
+     * the filter, sort and density row  — §2.1. It needs server work.
+     * the zero-results fallback grid    — §3.2 B. We have no second list.
+
+   ONE breakpoint: 750px. Horizon uses a viewport media query. We use a
+   CONTAINER query, because the app block sits inside a theme layout panel of
+   unknown width (§4.1). .ai-results is the container; every rule below asks
+   about the panel, never about the window. */
+
 .ai-results {
+  container-type: inline-size;
   text-align: start;
-  max-width: var(--ai-search-max-width, 1200px);
-  margin-inline: auto;
-  padding: 1.5rem 1rem;
 }
+
+/* The gutter and the top padding are the only two values the breakpoint
+   changes for the page frame, so they live as tokens on one inner element. */
+.ai-page {
+  --ai-gutter: 16px;
+  padding-block-start: 28px;
+}
+@container (min-width: 750px) {
+  .ai-page {
+    --ai-gutter: 40px;
+    padding-block-start: 40px;
+  }
+}
+
+/* 9a. the heading. Horizon prints "Search results" with a query and "Search"
+   without one, and never prints the query itself. render() picks the text. */
+.ai-heading {
+  padding-inline: var(--ai-gutter);
+  font-size: 36px;
+  line-height: 36px;
+  font-weight: 700;
+  margin: 0;
+}
+@container (min-width: 750px) {
+  .ai-heading {
+    font-size: 48px;
+    line-height: 48px;
+  }
+}
+
+/* 9b. the search field. Horizon: an icon, the input, and a reset control that
+   appears only when the field holds a value. No visible submit button —
+   Enter submits. Radius 4px here, NOT the modal's 14px. */
 .ai-form {
+  padding-inline: var(--ai-gutter);
+  margin-block: 20px 36px;
+}
+.ai-field {
+  position: relative;
   display: flex;
-  gap: 0.5rem;
-  margin-block-end: 1.25rem;
+  align-items: center;
+  inline-size: 100%;
+}
+@container (min-width: 750px) {
+  .ai-field { inline-size: 50%; }
 }
 .ai-input {
-  flex: 1;
+  inline-size: 100%;
   min-inline-size: 0;
   font: inherit;
-  padding: 0.6rem 0.8rem;
-  border: 1px solid var(--ais-border, rgba(0, 0, 0, 0.3));
+  font-size: 16px; /* below 16px iOS Safari zooms the page on focus */
+  line-height: 22.4px;
+  padding-block: 16px;
+  padding-inline: 44.8px;
+  border: 1px solid var(--ais-border, #dfdfdf);
   border-radius: 4px;
   background: var(--ais-bg, #fff);
   color: inherit;
 }
-.ai-button {
-  font: inherit;
-  padding: 0.6rem 1.1rem;
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  background: var(--ais-accent, #111);
-  color: var(--ais-accent-fg, #fff);
-  cursor: pointer;
+@container (min-width: 750px) {
+  .ai-input {
+    font-size: 14px;
+    padding-inline: 54px;
+  }
 }
-.ai-button:disabled { opacity: 0.6; cursor: default; }
-.ai-heading { font-size: 1.6rem; font-weight: 600; margin: 0 0 0.25rem; }
-.ai-subheading { margin: 0 0 0.25rem; }
-.ai-count { opacity: 0.7; margin: 0 0 1rem; }
-.ai-status { min-height: 1.5em; margin: 0 0 1rem; }
+.ai-field__icon,
+.ai-field__reset {
+  position: absolute;
+  inline-size: 24px;
+  block-size: 24px;
+  color: inherit;
+}
+.ai-field__icon {
+  inset-inline-start: 16px;
+  pointer-events: none;
+}
+.ai-field__icon svg { inline-size: 100%; block-size: 100%; }
+.ai-field__reset {
+  inset-inline-end: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  line-height: 1;
+  border-radius: 50%;
+}
+.ai-field__reset:focus-visible,
+.ai-input:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
+/* 9c. the count. Horizon carries role=status on this element and announces
+   the count alone ("11 items"), not the query. It sits at the inline END of
+   the filter row, and the whole row is hidden below 750px. */
+.ai-count {
+  display: none;
+  padding-inline: var(--ai-gutter);
+  margin-block-end: 8px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22.4px;
+  opacity: 0.8;
+}
+@container (min-width: 750px) {
+  .ai-count {
+    display: block;
+    text-align: end;
+  }
+}
+
+/* 9d. the zero-results sentence, and the error line. Horizon's sentence is
+   start-aligned at 14px with no margin. The error line is ours — Phase 6
+   dropped the modal's error state, the page keeps one (§6.2), because the
+   page IS the destination and the shopper needs a way out. */
+.ai-empty,
+.ai-status {
+  padding-inline: var(--ai-gutter);
+  font-size: 14px;
+  line-height: 22.4px;
+  text-align: start;
+}
+.ai-empty { margin: 0; }
+.ai-status { margin-block: 16px; }
+.ai-status:empty { display: none; }
 .ai-status a { text-decoration: underline; }
+
+/* 9e. the grid. Full bleed below 750px — Horizon lets it escape the gutter
+   there, and only there. */
 .ai-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
-  gap: 1.25rem 1rem;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
-.ai-grid .ai-card { display: block; }
-.ai-grid .ai-media { position: relative; display: block; }
-.ai-grid .ai-img,
-.ai-grid .ai-img--empty {
-  display: block;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  border-radius: 6px;
-  background: var(--ais-tint, rgba(0, 0, 0, 0.05));
+@container (min-width: 750px) {
+  .ai-grid {
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 24px 16px;
+    padding-inline: var(--ai-gutter);
+  }
 }
-.ai-grid .ai-badge {
-  position: absolute;
-  inset-block-start: 0.5rem;
-  inset-inline-start: 0.5rem;
-  font-size: 0.75rem;
-  background: rgba(0, 0, 0, 0.75);
-  color: #fff;
-  padding: 0.15rem 0.5rem;
-  border-radius: 3px;
+.ai-grid:empty { display: none; }
+/* The card content keeps clear of the screen edge once the grid is full bleed. */
+.ai-results .ai-card__content { padding-inline: 8px; }
+@container (min-width: 750px) {
+  .ai-results .ai-card__content { padding-inline: 0; }
 }
-.ai-grid .ai-title { display: block; margin-block-start: 0.5rem; }
-.ai-grid .ai-price { display: block; opacity: 0.8; margin-block-start: 0.15rem; }
-.ai-more { display: block; margin: 2rem auto 0; }
 
-@media (max-width: 480px) {
-  .ai-results { padding: 1rem 0.75rem; }
-  .ai-grid { grid-template-columns: repeat(2, 1fr); gap: 1rem 0.75rem; }
+/* 9f. "Load more". Spec §3.2 C: the reference store ran infinite scroll, so
+   there was no control to copy. This one maps onto the has_more field the
+   endpoint already returns, and it is reachable by keyboard.
+   Horizon's own .button-secondary has no border. We add one, because a
+   borderless transparent button on an unknown theme can vanish. */
+.ai-more {
+  display: block;
+  margin: 32px auto 0;
+  padding-block: 16px;
+  padding-inline: 24px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22.4px;
+  border: 1px solid var(--ais-border, #dfdfdf);
+  border-radius: var(--ais-radius, 14px);
+  background: transparent;
+  color: inherit;
 }
+.ai-more:hover { background: var(--ais-tint, rgba(0, 0, 0, 0.05)); }
+.ai-more:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.ai-more[disabled] { opacity: 0.6; cursor: default; }

@@ -391,11 +391,20 @@
     return span;
   }
 
-  // Phase 6 card — Horizon's resource-card: a 4:5 media box (NOT square) with
-  // object-fit:cover, then title and price. Horizon lays the link over the card
-  // as an absolute overlay; we make the card itself the <a> because it is also
-  // our role=option, and the card holds nothing else clickable.
-  function modalCard(hit, width) {
+  // The product card. ONE builder, TWO surfaces — Phase 7 §5.7.
+  //
+  // Horizon lays the link over the card as an absolute overlay. We make the
+  // card itself the <a>, because in the modal it is also our role=option and
+  // the card holds nothing else clickable.
+  //
+  // The markup is identical on both surfaces. Six VALUES differ, and every one
+  // of them lives in CSS, not here: the media ratio, the badge edge, the badge
+  // blur, the title clamp, the price size and the hover rule. See section 5 of
+  // ai-search.css.
+  //
+  // `option` is the only behavioural difference. The modal card is a listbox
+  // option; the results-page card is a plain link.
+  function productCard(hit, width, option) {
     var img =
       cfg.showImages && hit.image_url
         ? el('img', {
@@ -406,7 +415,7 @@
           })
         : el('span', { class: 'ai-img ai-img--empty', 'aria-hidden': 'true' });
     var price = priceText(hit);
-    return el('a', { class: 'ai-card ai-option', href: productUrl(hit) }, [
+    return el('a', { class: option ? 'ai-card ai-option' : 'ai-card', href: productUrl(hit) }, [
       el('span', { class: 'ai-card__media' }, [
         img,
         hit.available === false ? el('span', { class: 'ai-badge', text: t('soldOut') }) : null,
@@ -415,21 +424,6 @@
         el('span', { class: 'ai-title', text: hit.title }),
         price ? el('span', { class: 'ai-price', text: price }) : null,
       ]),
-    ]);
-  }
-
-  function card(hit, opts) {
-    var img = cfg.showImages && hit.image_url
-      ? el('img', { class: 'ai-img', src: imageUrl(hit, opts.width), alt: hit.image_alt || hit.title, loading: 'lazy' })
-      : el('span', { class: 'ai-img ai-img--empty', 'aria-hidden': 'true' });
-    var price = priceText(hit);
-    return el('a', { class: 'ai-card', href: productUrl(hit) }, [
-      el('span', { class: 'ai-media' }, [
-        img,
-        hit.available === false ? el('span', { class: 'ai-badge', text: t('soldOut') }) : null,
-      ]),
-      el('span', { class: 'ai-title', text: hit.title }),
-      price ? el('span', { class: 'ai-price', text: price }) : null,
     ]);
   }
 
@@ -780,7 +774,7 @@
     this.hits = hits;
     var grid = el('div', { class: 'ai-products__grid' });
     hits.forEach(function (hit, i) {
-      var a = modalCard(hit, 400);
+      var a = productCard(hit, 400, true);
       a.setAttribute('role', 'option');
       a.setAttribute('id', self.id + '-opt-' + i);
       a.setAttribute('data-index', String(i));
@@ -1382,6 +1376,17 @@
   }
 
   // ---------- 2. results block ----------
+  //
+  // Phase 7: the search results page copies Horizon, the same way Phase 6's
+  // modal does. Reference: specs/search-results-parity/reference/measurements.md.
+  //
+  // What we copy: the heading, the field, the count, the grid, the card, the
+  // zero-results sentence. What we leave out, and why, is in the spec: the
+  // filter/sort/density row (§2.1, it needs server work) and the zero-results
+  // fallback grid (§3.2 B, we have no second list).
+  //
+  // The block still lives in a shadow root behind the merchant's app block —
+  // §2.2. So the theme cannot restyle it, and `custom_css` is the way in.
 
   function ResultsBlock(container) {
     this.container = container;
@@ -1390,7 +1395,14 @@
     this.query = new URLSearchParams(window.location.search).get('q') || cfg.searchTerms || '';
     this.query = this.query.replace(/\s+/g, ' ').trim();
     this.page = 0;
+    this.announced = false;
     applyTokens(container); // 6.6 — same sampled tokens as the modal
+    // 7.7 / §6.4 — the Phase 6 takeover binds a CAPTURE-phase focusin on
+    // `document` and opens the modal for anything that matches a search
+    // trigger. focusin composes, so composedPath() reaches our own field
+    // inside this shadow root. isOurs() skips a path that carries this flag.
+    // Without it every click on our own field opens the modal over the page.
+    container.__aiSearchModal = true;
     this.root = shadow(container);
     this.wrap = el('div', { class: 'ai-results', dir: pageDir(container) });
     this.root.appendChild(this.wrap);
@@ -1401,64 +1413,101 @@
     var self = this;
     var c = this.container;
     this.wrap.textContent = '';
-    if (c.getAttribute('data-show-form') !== 'false') {
-      var input = el('input', {
-        type: 'search',
-        name: 'q',
-        class: 'ai-input',
-        value: this.query,
-        placeholder: t('searchPlaceholder'),
-        'aria-label': t('searchPlaceholder'),
-        autocomplete: 'off',
-      });
-      var form = el('form', { class: 'ai-form', action: cfg.searchUrl || '/search', method: 'get', role: 'search' }, [
-        input,
-        el('button', { type: 'submit', class: 'ai-button', text: t('searchButton') }),
-      ]);
-      this.wrap.appendChild(form);
-      attachDropdown(input);
-    }
-    var heading = c.getAttribute('data-heading');
-    if (heading) this.wrap.appendChild(el('h1', { class: 'ai-heading', text: heading }));
-    if (this.query) {
-      this.wrap.appendChild(el('p', { class: 'ai-subheading', text: t('resultsFor', { query: this.query }) }));
-    }
-    this.count = el('p', { class: 'ai-count' });
-    if (c.getAttribute('data-show-count') !== 'false') this.wrap.appendChild(this.count);
-    this.status = el('p', { class: 'ai-status', role: 'status' });
-    this.wrap.appendChild(this.status);
+    var page = el('div', { class: 'ai-page' });
+    this.wrap.appendChild(page);
+
+    // The heading never prints the query, and its text depends on whether
+    // there is one: "Search results" with, "Search" without (measurements §3).
+    page.appendChild(
+      el('h1', {
+        class: 'ai-heading',
+        text: this.query ? t('searchResults') : t('searchHeading'),
+      }),
+    );
+
+    if (c.getAttribute('data-show-form') !== 'false') page.appendChild(this.field());
+
+    // Horizon carries role=status on the count element itself and announces
+    // the count alone — "11 items", not the query (measurements §5).
+    this.count = el('p', { class: 'ai-count', role: 'status' });
+    if (c.getAttribute('data-show-count') !== 'false') page.appendChild(this.count);
+
+    // Zero results (§6.1) and the loading line share this slot. It is empty
+    // in every other state, and CSS hides it when empty.
+    this.note = el('p', { class: 'ai-empty' });
+    page.appendChild(this.note);
+
     this.grid = el('div', { class: 'ai-grid' });
-    this.wrap.appendChild(this.grid);
-    this.more = el('button', { type: 'button', class: 'ai-button ai-more', text: t('loadMore') });
+    page.appendChild(this.grid);
+
+    // The error line is separate from the note: it is assertive, it survives
+    // a re-render of the note, and §6.2 keeps it when the modal has none.
+    this.status = el('p', { class: 'ai-status', role: 'alert' });
+    page.appendChild(this.status);
+
+    this.more = el('button', { type: 'button', class: 'ai-more', text: t('loadMore') });
     this.more.style.display = 'none';
     this.more.addEventListener('click', function () {
       self.load();
     });
-    this.wrap.appendChild(this.more);
+    page.appendChild(this.more);
+
     if (this.query) this.load();
+  };
+
+  // The Horizon field: a magnifier, the input, and a reset control that shows
+  // only when the field holds a value (measurements §4). No visible submit
+  // button — Enter submits, as it does on Horizon.
+  ResultsBlock.prototype.field = function () {
+    var input = el('input', {
+      type: 'search',
+      name: 'q',
+      class: 'ai-input',
+      value: this.query,
+      placeholder: t('searchPlaceholder'),
+      'aria-label': t('searchPlaceholder'),
+      autocomplete: 'off',
+    });
+    var icon = magnifier();
+    icon.className = 'ai-field__icon';
+    var reset = el('button', {
+      type: 'button',
+      class: 'ai-field__reset',
+      'aria-label': t('clear'),
+      text: '×',
+    });
+    reset.style.display = this.query ? '' : 'none';
+    reset.addEventListener('click', function () {
+      input.value = '';
+      reset.style.display = 'none';
+      input.focus();
+    });
+    input.addEventListener('input', function () {
+      reset.style.display = input.value ? '' : 'none';
+    });
+    var form = el('form', { class: 'ai-form', action: cfg.searchUrl || '/search', method: 'get', role: 'search' }, [
+      el('div', { class: 'ai-field' }, [icon, input, reset]),
+    ]);
+    // 7.7 / §6.4 — Horizon's results-page field is a plain inline form. It
+    // submits; it does NOT open the search modal. So no attachDropdown here.
+    return form;
   };
 
   ResultsBlock.prototype.load = function () {
     var self = this;
     var page = this.page + 1;
-    this.status.textContent = t('loading');
+    this.status.textContent = '';
+    if (page === 1) this.note.textContent = t('loading');
     this.more.disabled = true;
     fetchJSON(this.endpoint + '?' + 'q=' + encodeURIComponent(this.query) + '&page=' + page + '&limit=' + this.limit)
       .then(function (body) {
         self.page = page;
-        self.status.textContent = '';
         self.more.disabled = false;
-        (body.hits || []).forEach(function (hit) {
-          self.grid.appendChild(card(hit, { width: 400 }));
+        var hits = body.hits || [];
+        hits.forEach(function (hit) {
+          self.grid.appendChild(productCard(hit, 500, false));
         });
-        if (page === 1) {
-          if (!body.hits || !body.hits.length) {
-            self.status.textContent = t('noResults');
-            self.count.textContent = '';
-          } else {
-            self.count.textContent = t('resultsCount', { count: body.total });
-          }
-        }
+        if (page === 1) self.first(body, hits);
         self.more.style.display = body.has_more ? '' : 'none';
       })
       .catch(function () {
@@ -1466,14 +1515,34 @@
       });
   };
 
+  // Page one decides the state. Later pages only append cards, and they must
+  // not re-announce: the total has not changed, and a second announcement is
+  // noise for a screen-reader user (§6.3).
+  ResultsBlock.prototype.first = function (body, hits) {
+    this.note.textContent = '';
+    if (!hits.length) {
+      // Zero results (§6.1). Horizon adds a fallback grid of the store's
+      // products here; we have no second list, so we print the sentence
+      // alone — spec §3.2 B.
+      this.note.textContent = t('pageNoResults', { query: this.query });
+      this.count.textContent = '';
+      return;
+    }
+    if (this.announced) return;
+    this.announced = true;
+    this.count.textContent = t('itemsCount', { count: body.total });
+  };
+
   // Never a blank page: bring the theme's own results back and say so.
   ResultsBlock.prototype.fail = function () {
     var styleId = this.container.getAttribute('data-native-style');
     var style = styleId && document.getElementById(styleId);
     if (style) style.parentNode.removeChild(style);
-    this.status.textContent = '';
+    this.note.textContent = '';
+    this.more.disabled = false;
     this.more.style.display = 'none';
     var href = (cfg.searchUrl || '/search') + '?q=' + encodeURIComponent(this.query) + '&ai=0';
+    this.status.textContent = '';
     this.status.appendChild(el('span', { text: t('error') + ' ' }));
     this.status.appendChild(el('a', { href: href, text: t('nativeLink') }));
   };

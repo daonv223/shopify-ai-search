@@ -62,11 +62,13 @@ function boot(config: Record<string, unknown> = {}, html = "") {
       error: "שגיאה.",
       nativeLink: "חיפוש רגיל",
       soldOut: "אזל",
-      resultsFor: "תוצאות עבור „{{ query }}”",
-      resultsCount: "{{ count }} מוצרים",
+      searchResults: "תוצאות חיפוש",
+      searchHeading: "חיפוש",
+      itemsCount: "{{ count }} פריטים",
+      pageNoResults: "לא נמצאו תוצאות עבור „{{ query }}”. בדקו את האיות.",
       statusResults: "{{ count }} הצעות",
       searchPlaceholder: "חיפוש",
-      searchButton: "חפש",
+      clear: "נקה",
     },
     ...config,
   };
@@ -864,7 +866,7 @@ describe("results block (block mode)", () => {
   const BLOCK = `
     <style id="ai-search-hide-native">.native{display:none!important}</style>
     <div class="native shopify-section">NATIVE RESULTS</div>
-    <div data-ai-search-results data-endpoint="/apps/search/results" data-limit="2" data-heading="תוצאות" data-native-style="ai-search-hide-native"></div>`;
+    <div data-ai-search-results data-endpoint="/apps/search/results" data-limit="2" data-native-style="ai-search-hide-native"></div>`;
   const block = () => document.querySelector("[data-ai-search-results]") as HTMLElement;
   const wrap = () => block().shadowRoot!.querySelector(".ai-results") as HTMLElement;
 
@@ -884,8 +886,14 @@ describe("results block (block mode)", () => {
     await flush();
     await flush();
     expect(wrap().querySelectorAll(".ai-grid .ai-card")).toHaveLength(2);
-    expect(wrap().querySelector(".ai-count")!.textContent).toBe("5 מוצרים");
-    expect(wrap().querySelector(".ai-subheading")!.textContent).toContain("שמנים");
+    // Phase 7 §5.2 — Horizon's heading never prints the query
+    expect(wrap().querySelector(".ai-heading")!.textContent).toBe("תוצאות חיפוש");
+    expect(wrap().querySelector(".ai-subheading")).toBeNull();
+    // §5.6 / §6.3 — the count element IS the live region, and it says the
+    // count alone, as Horizon does
+    const count = wrap().querySelector(".ai-count")!;
+    expect(count.textContent).toBe("5 פריטים");
+    expect(count.getAttribute("role")).toBe("status");
     const more = wrap().querySelector(".ai-more") as HTMLButtonElement;
     expect(more.style.display).toBe("");
     more.click();
@@ -894,11 +902,43 @@ describe("results block (block mode)", () => {
     await flush();
     expect(wrap().querySelectorAll(".ai-grid .ai-card")).toHaveLength(3);
     expect(more.style.display).toBe("none");
+    // page 2 must not re-announce: the total has not changed (§6.3)
+    expect(count.textContent).toBe("5 פריטים");
     // native stays hidden
     expect(document.getElementById("ai-search-hide-native")).not.toBeNull();
-    // the block's own search box is intercepted too
+    // §5.7 — one card builder, so the page card carries the modal's markup
+    const card = wrap().querySelector(".ai-grid .ai-card")!;
+    expect(card.querySelector(".ai-card__media")).not.toBeNull();
+    expect(card.querySelector(".ai-card__content")).not.toBeNull();
+    // ...but it is a plain link here, not a listbox option
+    expect(card.classList.contains("ai-option")).toBe(false);
+  });
+
+  // Phase 7 §6.4. Horizon's results-page field is a plain inline form: it
+  // submits, it does not open the search modal. Two things make that true, and
+  // the second is the one that bites — the Phase 6 takeover binds a
+  // capture-phase focusin on `document`, and focusin composes out of a shadow
+  // root, so dropping attachDropdown alone is not enough.
+  it("the page's own field does not open the modal", async () => {
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn(), search: "?q=%D7%A9%D7%9E%D7%9F" });
+    fetchMock.mockImplementation(() => respond({ hits: [hit(1)], total: 1, has_more: false }));
+    boot({}, BLOCK);
+    await flush();
+    await flush();
     const inner = wrap().querySelector("input.ai-input") as HTMLInputElement;
-    expect(inner.getAttribute("role")).toBe("combobox");
+    expect(inner.getAttribute("role")).toBeNull();
+    expect((block() as unknown as { __aiSearchModal?: boolean }).__aiSearchModal).toBe(true);
+    inner.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    expect(document.querySelector("[data-ai-search='dropdown']")).toBeNull();
+  });
+
+  it("no query: the heading changes and nothing is fetched", () => {
+    vi.stubGlobal("location", { ...window.location, assign: vi.fn(), search: "" });
+    boot({}, BLOCK);
+    expect(wrap().querySelector(".ai-heading")!.textContent).toBe("חיפוש");
+    expect(wrap().querySelector(".ai-count")!.textContent).toBe("");
+    expect(wrap().querySelectorAll(".ai-card")).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("empty state", async () => {
@@ -907,8 +947,11 @@ describe("results block (block mode)", () => {
     boot({}, BLOCK);
     await flush();
     await flush();
-    expect(wrap().querySelector(".ai-status")!.textContent).toBe("אין תוצאות");
+    // §6.1 — Horizon's sentence, with the query. No count, no grid, no button.
+    expect(wrap().querySelector(".ai-empty")!.textContent).toContain("zzzz");
+    expect(wrap().querySelector(".ai-count")!.textContent).toBe("");
     expect(wrap().querySelectorAll(".ai-card")).toHaveLength(0);
+    expect((wrap().querySelector(".ai-more") as HTMLButtonElement).style.display).toBe("none");
   });
 
   it("endpoint failure: native results un-hidden and linked, never blank", async () => {

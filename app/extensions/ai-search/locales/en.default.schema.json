@@ -27,7 +27,6 @@
   },
   "results": {
     "name": "AI Search results",
-    "heading": { "label": "Heading" },
     "page_size": { "label": "Products per page" },
     "show_search_form": { "label": "Show a search box above the results" },
     "show_count": { "label": "Show the result count" },

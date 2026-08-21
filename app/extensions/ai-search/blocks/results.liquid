@@ -17,11 +17,9 @@
   data-ai-search-results
   data-endpoint="/apps/search/results"
   data-limit="{{ block.settings.page_size | default: 24 }}"
-  data-heading="{{ block.settings.heading | escape }}"
   data-show-form="{{ block.settings.show_search_form }}"
   data-show-count="{{ block.settings.show_count }}"
   data-native-style="ai-search-hide-native"
-  dir="rtl"
   {{ block.shopify_attributes }}
 ></div>
 {%- unless request.design_mode -%}
@@ -35,7 +33,6 @@
   "name": "t:results.name",
   "target": "section",
   "settings": [
-    { "type": "text", "id": "heading", "label": "t:results.heading.label", "default": "תוצאות חיפוש" },
     { "type": "range", "id": "page_size", "label": "t:results.page_size.label", "min": 12, "max": 48, "step": 4, "default": 24 },
     { "type": "checkbox", "id": "show_search_form", "label": "t:results.show_search_form.label", "default": true },
     { "type": "checkbox", "id": "show_count", "label": "t:results.show_count.label", "default": true },

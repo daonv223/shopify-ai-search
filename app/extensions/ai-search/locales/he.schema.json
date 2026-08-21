@@ -27,7 +27,6 @@
   },
   "results": {
     "name": "תוצאות חיפוש AI",
-    "heading": { "label": "כותרת" },
     "page_size": { "label": "מוצרים בעמוד" },
     "show_search_form": { "label": "הצגת תיבת חיפוש מעל התוצאות" },
     "show_count": { "label": "הצגת מספר התוצאות" },
