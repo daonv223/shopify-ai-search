@@ -2,7 +2,10 @@
 
 > Derived from `ideal.md` and validated against Shopify's native search engine
 > (research + live testing on il.loccitane.com, a native-search Hebrew store, July 2026).
-> See `Verify Shopify AI search app against native search capabilities.md` for full evidence.
+> The raw evidence is not in this repository. The research transcript and the
+> `benchmark/` tree were both removed before this repo was published: the
+> first was a chat log, the second held a scraped third-party catalog and a
+> live API key. `specs/pre-build-validation/` carries the measured results.
 
 ## 1. Positioning
 

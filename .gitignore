@@ -1,15 +1,8 @@
 /my-notes.md
-benchmark/.env
-benchmark/part1_wordpairs/cache/
-benchmark/data/
-
-# Regenerable: embedding cache (~21 MB), raw catalog pages, composed embedding inputs.
-# The scored evidence (catalog.json, native_baseline.json, engine_results.json, scores.json)
-# is small and stays tracked.
-benchmark/part2_retrieval/cache/
-benchmark/part2_retrieval/data/catalog/
-benchmark/part2_retrieval/data/embedding_inputs.json
-benchmark/part2_retrieval/data/native_baseline.log
+# The Phase 0 benchmark is local-only. It holds a scraped third-party catalog
+# and a live Gemini key (benchmark/.env), so none of it belongs in a public
+# repo. The measured conclusions live in specs/pre-build-validation/.
+/benchmark/
 __pycache__/
 *.pyc
 
