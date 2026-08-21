@@ -231,13 +231,16 @@ input { font: inherit; color: inherit; }
   container-type: inline-size;
 }
 
-/* Empty query (§7): header and footer only — no grid, no message. */
+/* Empty query (§7): the header only. There is no query, so "View all" would
+   point at /search?q= and mean nothing. */
 .ai-modal .ai-panel[data-state='blank'] .ai-results-inner { padding-block: 0; }
 
-/* No results (§7): Horizon hides the footer and the modal shrinks, so the
-   64px reserve goes with it. */
-.ai-modal .ai-panel[data-state='empty'] .ai-scroll { padding-block-end: 0; }
-.ai-modal .ai-panel[data-state='empty'] .ai-footer { display: none; }
+/* The footer pill floats over the scroll area, so the scroller reserves 64px
+   for it. With no footer there is nothing to reserve, and the panel must
+   collapse to zero rather than leave a blank band under the header.
+   Both non-results states: blank (no query) and empty (no hits). */
+.ai-modal .ai-panel:not([data-state='results']) .ai-scroll { padding-block-end: 0; }
+.ai-modal .ai-panel:not([data-state='results']) .ai-footer { display: none; }
 
 /* ---------- 4. products heading + grid (6.3 / 6.7) ---------- */
 

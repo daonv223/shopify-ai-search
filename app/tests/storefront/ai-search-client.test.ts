@@ -676,8 +676,19 @@ describe("trigger takeover (spec §4.2/§4.3/§4.4)", () => {
     expect(ev.defaultPrevented).toBe(true);
     expect(host().style.display).toBe("block");
     expect(host().shadowRoot!.activeElement).toBe(field());
-    // Empty query: header and footer only (§7).
     expect(panel().getAttribute("data-state")).toBe("blank");
+  });
+
+  it("the blank state shows the header alone — no dangling View all pill", () => {
+    // §7. With no query the pill would point at /search?q= and mean nothing,
+    // and it floated over an empty 64px band that read as a second modal.
+    boot({}, THEME_HEADER);
+    clickOn(toggle());
+    const pill = host().shadowRoot!.querySelector(".ai-viewall") as HTMLElement;
+    expect(panel().getAttribute("data-state")).toBe("blank");
+    // out of the listbox, so ArrowDown cannot land on it
+    expect(pill.hasAttribute("role")).toBe(false);
+    expect(options()).toHaveLength(0);
   });
 
   it("the default trigger list also covers a plain link to /search", () => {

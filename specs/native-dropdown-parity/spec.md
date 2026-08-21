@@ -329,11 +329,14 @@ storefront page. Shopify app review treats that as a rejection reason.
 
 | State | Behaviour |
 |---|---|
-| Open, empty query | Header and footer only. No grid. No message. Clear button hidden. |
+| Open, empty query | **The header alone.** No grid, no message, no footer. The Clear button is hidden. With no query the "View all" pill would point at `/search?q=` and mean nothing, and it floated over an empty 64 px band that read as a second modal. |
 | Below `minChars` | Same as empty. |
 | Loading | Keep the old cards. Do not clear. Do not show a spinner. |
 | Results | The grid. The heading. The footer button. No pills — see §13. |
 | No results | Horizon's sentence, with the query. **Hide the footer button**, as Horizon does. The live region carries the sentence without "Try another search." |
+
+The footer pill floats over the scroll area, so the scroller reserves 64 px for it. Both non-results states drop that reserve, or the panel leaves a blank band under the header.
+
 | Error or timeout | Show the No results state, exactly as the row above. Log once to the console. |
 | Live region | The true total and the query, as Horizon does: `10 search results found for "snowboard"`. Not the card count. |
 | Semantic upgrade | See §7.1. |

@@ -716,10 +716,11 @@
     this.viewAll.setAttribute('data-index', '0');
     this.viewAll.setAttribute('aria-selected', 'false');
     this.viewAll.classList.remove('is-active');
-    // No results: Horizon hides the footer, so it must leave the listbox too —
-    // an arrow key must not land on an invisible option.
-    if (state === 'empty') this.viewAll.removeAttribute('role');
-    else this.viewAll.setAttribute('role', 'option');
+    // The footer is hidden in both non-results states, so the pill must leave
+    // the listbox too — an arrow key must not land on an invisible option,
+    // and in the blank state its href is /search?q= and means nothing.
+    if (state === 'results') this.viewAll.setAttribute('role', 'option');
+    else this.viewAll.removeAttribute('role');
     // 6.10 adds a dedicated "View all" string; until then reuse Phase 4's.
     this.viewAll.textContent = t('viewAll') || 'View all';
     this.searchForm.setAttribute('action', this.searchBase());
