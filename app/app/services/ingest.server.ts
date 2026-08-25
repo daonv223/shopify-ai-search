@@ -208,6 +208,7 @@ export async function processBulkOperationFinish(
     );
   } // no url => empty catalog; fall through and sync to zero
 
+  console.log(`[ingest] objectCount=${op.objectCount} parsedProducts=${inputs.length}`);
   const result = await indexProducts(shop, shopRow.indexAlias, inputs, { fullSync: true });
   scheduleEmbeddingBackfill(shop, shopRow.indexAlias);
 
