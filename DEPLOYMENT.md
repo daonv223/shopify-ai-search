@@ -66,7 +66,7 @@ Never commit `SHOPIFY_API_SECRET`. Set it on the server only.
 9. Update `shopify.app.toml`:
     - `application_url` -> the DuckDNS HTTPS URL
     - `[app_proxy].url` -> `https://<host>/proxy/search`
-    - `[auth].redirect_urls` -> `https://<host>/api/auth`
+    - `[auth].redirect_urls` -> `https://<host>/auth/callback`
 10. Run `shopify app deploy` to push config, webhooks, and the theme extension.
 
 Note: do NOT run `npm run migrate-index` at first deploy. It rebuilds an
