@@ -2,8 +2,8 @@
 # One instance runs everything: app + Postgres + OpenSearch + Caddy.
 # Only Caddy is exposed to the internet (ports 80/443). The rest stay private.
 #
-# Usage on the server:
-#   docker compose -f docker-compose.prod.yml up -d --build
+# Usage on the server (always pass --env-file so ${POSTGRES_PASSWORD} resolves):
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 #
 # The in-process cron requires exactly ONE app instance. Do not scale.
 services:
