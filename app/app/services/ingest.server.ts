@@ -99,9 +99,16 @@ interface BulkProductRow {
 // Stream-parse a bulk operation JSONL result into ProductInputs. Child lines
 // always follow their parent, so a single accumulator map suffices; memory
 // holds the composed inputs (small), never the raw file.
-export async function parseBulkJsonl(stream: NodeJS.ReadableStream): Promise<ProductInput[]> {
+export async function parseBulkJsonl(
+  stream: NodeJS.ReadableStream,
+  shop?: string,
+): Promise<ProductInput[]> {
   const products = new Map<string, ProductInput>();
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  // Development stores stay password-protected, so Shopify returns a null
+  // onlineStoreUrl for every product. Set INGEST_ALLOW_UNPUBLISHED=1 on such a
+  // store to index the active products anyway, with a URL built from the handle.
+  const allowUnpublished = process.env.INGEST_ALLOW_UNPUBLISHED === "1";
 
   for await (const line of rl) {
     if (!line.trim()) continue;
@@ -115,8 +122,10 @@ export async function parseBulkJsonl(stream: NodeJS.ReadableStream): Promise<Pro
       // unless the product is published to the Online Store channel, which
       // excludes active-but-unpublished and POS-only products at the source.
       // Its variant/metafield child lines then find no parent and no-op.
-      if (!p.onlineStoreUrl) continue;
+      if (!p.onlineStoreUrl && !allowUnpublished) continue;
       const image = p.featuredMedia?.preview?.image;
+      const url =
+        p.onlineStoreUrl ?? (shop ? `https://${shop}/products/${p.handle}` : undefined);
       products.set(gid, {
         id: gidToId(gid),
         handle: p.handle,
@@ -125,7 +134,7 @@ export async function parseBulkJsonl(stream: NodeJS.ReadableStream): Promise<Pro
         vendor: p.vendor ?? "",
         tags: p.tags ?? [],
         body: stripHtml(p.descriptionHtml ?? ""),
-        url: p.onlineStoreUrl ?? undefined,
+        url,
         imageUrl: image?.url,
         imageAlt: image?.altText ?? undefined,
         categoryName: p.category?.name,
@@ -205,6 +214,7 @@ export async function processBulkOperationFinish(
     }
     inputs = await parseBulkJsonl(
       Readable.fromWeb(download.body as import("stream/web").ReadableStream),
+      shop,
     );
   } // no url => empty catalog; fall through and sync to zero
 
