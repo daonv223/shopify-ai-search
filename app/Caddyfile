@@ -1,6 +1,6 @@
 # Replace the hostname with your DuckDNS host.
 # Caddy requests a Let's Encrypt certificate automatically.
-norma-ai-search.duckdns.org {
+hebrew-ai-search.duckdns.org {
 	encode zstd gzip
 	reverse_proxy app:3000
 }
