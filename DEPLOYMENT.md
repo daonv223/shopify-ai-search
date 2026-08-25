@@ -61,13 +61,17 @@ Never commit `SHOPIFY_API_SECRET`. Set it on the server only.
 5. Add a production `docker-compose.yml` (app + Postgres + OpenSearch + Caddy).
 6. Add a `Caddyfile` for the DuckDNS hostname.
 7. Set the production env vars.
-8. Run `docker compose up -d`. The app runs `prisma migrate deploy` on start.
-9. Run `npm run migrate-index` once, to build the OpenSearch index.
-10. Update `shopify.app.toml`:
+8. Run `docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build`.
+   The app runs `prisma migrate deploy` on start.
+9. Update `shopify.app.toml`:
     - `application_url` -> the DuckDNS HTTPS URL
     - `[app_proxy].url` -> `https://<host>/proxy/search`
     - `[auth].redirect_urls` -> `https://<host>/api/auth`
-11. Run `shopify app deploy` to push config, webhooks, and the theme extension.
+10. Run `shopify app deploy` to push config, webhooks, and the theme extension.
+
+Note: do NOT run `npm run migrate-index` at first deploy. It rebuilds an
+EXISTING per-store index; no index exists until a store installs the app and
+its products ingest. Run it later only after an analyzer mapping change.
 
 ## Cost
 
