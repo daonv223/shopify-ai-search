@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "1b51bc8f1760a95efb4103ce3b7997e5"
-application_url = "https://shopify.dev/apps/default-app-home"
+application_url = "https://hebrew-ai-search.duckdns.org"
 embedded = true
 name = "ai-search"
 
@@ -10,7 +10,7 @@ name = "ai-search"
 scopes = "read_products"
 
 [app_proxy]
-url = "https://example.invalid/proxy/search"
+url = "https://hebrew-ai-search.duckdns.org/proxy/search"
 prefix = "apps"
 subpath = "search"
 
@@ -34,7 +34,7 @@ api_version = "2026-10"
   topics = [ "bulk_operations/finish" ]
 
 [auth]
-redirect_urls = [ "https://shopify.dev/apps/default-app-home/api/auth" ]
+redirect_urls = [ "https://hebrew-ai-search.duckdns.org/api/auth" ]
 
 [build]
 include_config_on_deploy = true
